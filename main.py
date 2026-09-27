@@ -37,23 +37,34 @@ def main():
     init_db()
     print_header()
 
+    port = int(os.environ.get("PORT", 8080))
+
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
         if cmd in ["report", "analysis"]:
             print(generate_markdown_report())
             return
         elif cmd in ["server", "web"]:
-            port = int(sys.argv[2]) if len(sys.argv) > 2 else 8080
+            if len(sys.argv) > 2:
+                port = int(sys.argv[2])
             run_server(port)
             return
 
-    # 選択肢を挟まず、直ちにWebダッシュボードを起動＆ブラウザを自動オープン
-    port = 8080
     url = f"http://localhost:{port}/"
-    print(f"\n🚀 Webダッシュボードを自動起動しています...")
-    print(f"🌐 ブラウザを開きます: {url}")
+    print(f"\n🚀 Webダッシュボードを起動しています...")
+    print(f"🌐 アドレス: {url}")
     print("（ダッシュボードを終了するにはこのウィンドウを閉じるか Ctrl+C を押してください）\n")
-    threading.Thread(target=open_browser_delayed, args=(url,), daemon=True).start()
+
+    # クラウド環境・コンテナ・ヘッドレス環境ではブラウザ起動をスキップ
+    is_headless = bool(
+        os.environ.get("RENDER")
+        or os.environ.get("RAILWAY_STATIC_URL")
+        or os.environ.get("FLY_ALLOC_ID")
+        or os.environ.get("NO_BROWSER")
+    )
+    if not is_headless:
+        threading.Thread(target=open_browser_delayed, args=(url,), daemon=True).start()
+
     run_server(port)
 
 

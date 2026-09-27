@@ -12,7 +12,7 @@ import os
 import sys
 import json
 import urllib.parse
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from typing import Dict, Any
 
 # パス設定
@@ -315,26 +315,28 @@ class EarningsTradeHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def run_server(port: int = 8080):
+def run_server(port: int = None):
     init_db()
-    server_address = ("", port)
+    if port is None:
+        port = int(os.environ.get("PORT", 8080))
+    server_address = ("0.0.0.0", port)
     try:
-        httpd = HTTPServer(server_address, EarningsTradeHandler)
+        httpd = ThreadingHTTPServer(server_address, EarningsTradeHandler)
         print(f"=====================================================")
-        print(f"  決算トレード実運用ダッシュボード稼働中")
+        print(f"  決算トレード実運用ダッシュボード稼働中 (マルチスレッド)")
         print(f"  市場API: yfinance (東証リアルタイムデータ連携)")
-        print(f"  URL: http://localhost:{port}/")
+        print(f"  URL: http://localhost:{port}/ (バインド: 0.0.0.0)")
         print(f"=====================================================")
         httpd.serve_forever()
     except OSError:
         port = port + 1
-        httpd = HTTPServer(("", port), EarningsTradeHandler)
+        httpd = ThreadingHTTPServer(("0.0.0.0", port), EarningsTradeHandler)
         print(f"Port busy. Starting on http://localhost:{port}/")
         httpd.serve_forever()
 
 
 if __name__ == "__main__":
-    port = 8080
+    port = int(os.environ.get("PORT", 8080))
     if len(sys.argv) > 1:
         port = int(sys.argv[1])
     run_server(port)

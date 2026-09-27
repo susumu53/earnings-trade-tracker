@@ -93,6 +93,25 @@ python main.py
 
 ---
 
+## ☁️ クラウド公開 (Render無料デプロイ)
+
+本リポジトリは [Render](https://render.com) の無料プランに対応しています。GitHubと連携するだけで、インターネット上にWebアプリとして公開できます。
+
+### デプロイ手順（3ステップ）:
+1. **[Render](https://dashboard.render.com/) にサインアップ / ログイン**（GitHubアカウントでログイン推奨）
+2. **「New +」→「Web Service」をクリック**
+   - 連携済みリポジトリ一覧から `earnings-trade-tracker` を選択
+3. **設定を入力して「Deploy Web Service」をクリック**
+   - **Name**: `earnings-trade-tracker` (任意)
+   - **Runtime**: `Python 3`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `python main.py`
+   - **Instance Type**: `Free` (無料)
+4. 数分でビルドが完了し、`https://earnings-trade-tracker-xxxx.onrender.com` の公開URLが発行されます！
+
+---
+
+
 ## 📂 ディレクトリ構成
 
 ```
