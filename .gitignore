@@ -58,3 +58,6 @@ docs/plans/
 # Application Data & Cache (Auto-generated at runtime)
 data/*
 !data/.gitkeep
+
+# Local generated reports (e.g. note articles)
+reports/
