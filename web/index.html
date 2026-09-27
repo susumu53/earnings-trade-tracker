@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EarningsTrade Tracker - 決算プレトレード予測・検証実運用システム</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- サイドバー / ヘッダー -->
+    <header class="navbar">
+      <div class="brand">
+        <div class="logo-icon">📈</div>
+        <div>
+          <h1>EarningsTrade <span class="accent-text">Tracker</span> <span class="live-indicator"><span class="live-dot"></span> LIVE DATA API</span></h1>
+          <p class="subtitle">東証リアルタイム市場データ連携 ➔ 決算2週間前予測 ➔ 決算後1週間結果自動検証 ➔ 自己学習システム</p>
+        </div>
+      </div>
+      <div class="nav-actions">
+        <select id="season-selector" class="select-input">
+          <option value="">全シーズン統合</option>
+          <option value="2026Q3">2026年 Q3 (現在)</option>
+          <option value="2026Q2">2026年 Q2</option>
+          <option value="2026Q1">2026年 Q1</option>
+        </select>
+        <button id="btn-auto-screen-modal" class="btn btn-primary" title="決算日が近い注目銘柄を東証全銘柄から自動発掘">
+          🔍 決算直前 注目銘柄スクリーナー
+        </button>
+        <button id="btn-clear-db" class="btn btn-danger-outline btn-sm" title="データベースをクリアして実運用を開始">🧹 本番用にDB初期化</button>
+      </div>
+
+
+    </header>
+
+    <!-- タブナビゲーション -->
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="tab-watchlist">
+        <span class="icon">📋</span> 監視・予測リスト <span class="badge" id="badge-total">0</span>
+      </button>
+      <button class="tab-btn" data-tab="tab-new-pickup">
+        <span class="icon">🎯</span> 銘柄ピックアップ＆リアルタイム分析
+      </button>
+      <button class="tab-btn" data-tab="tab-insights">
+        <span class="icon">📊</span> 次期シーズン学習・勝率分析
+      </button>
+    </nav>
+
+    <!-- メインコンテンツ -->
+    <main class="content-area">
+
+      <!-- タブ1: 監視・予測リスト -->
+      <section id="tab-watchlist" class="tab-pane active">
+        <!-- 簡易KPIバー -->
+        <div class="mini-kpi-row">
+          <div class="mini-kpi-card">
+            <span class="kpi-label">登録予測数</span>
+            <span class="kpi-val" id="kpi-total-preds">0</span>
+          </div>
+          <div class="mini-kpi-card">
+            <span class="kpi-label">検証完了</span>
+            <span class="kpi-val" id="kpi-completed-preds">0</span>
+          </div>
+          <div class="mini-kpi-card highlight">
+            <span class="kpi-label">勝率 (Win Rate)</span>
+            <span class="kpi-val" id="kpi-win-rate">--%</span>
+          </div>
+          <div class="mini-kpi-card success">
+            <span class="kpi-label">平均最大上昇率</span>
+            <span class="kpi-val" id="kpi-avg-max-gain">--%</span>
+          </div>
+          <div class="mini-kpi-card">
+            <span class="kpi-label">PF (Profit Factor)</span>
+            <span class="kpi-val" id="kpi-pf">--</span>
+          </div>
+        </div>
+
+        <!-- フィルタ & リスト -->
+        <div class="card table-card">
+          <div class="card-header">
+            <h3>銘柄予測・トラッキング一覧</h3>
+            <div class="filter-group">
+              <button class="filter-chip active" data-filter="all">すべて</button>
+              <button class="filter-chip" data-filter="pending">決算待ち・監視中</button>
+              <button class="filter-chip" data-filter="completed">検証完了</button>
+            </div>
+          </div>
+          <div class="table-wrapper">
+            <table class="data-table" id="table-records">
+              <thead>
+                <tr>
+                  <th>状態</th>
+                  <th>コード / 銘柄 <span style="font-size:11px; color:var(--accent-cyan); font-weight:normal;">(クリックで分析)</span></th>
+                  <th>決算予定日</th>
+                  <th>テクニカル</th>
+                  <th>現在値 ➔ 目標株価</th>
+                  <th>想定上昇率</th>
+                  <th>損切り</th>
+                  <th>リスクリワード</th>
+                  <th>コンセンサス</th>
+                  <th>決算後1週間 結果</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="records-tbody">
+                <!-- 動的に生成 -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- タブ2: 新規ピックアップ＆リアルタイム予測登録 -->
+      <section id="tab-new-pickup" class="tab-pane">
+        <div class="two-col-layout">
+          <!-- 入力フォーム -->
+          <div class="card form-card">
+            <div class="card-header">
+              <h3>🎯 銘柄ピックアップ & リアルタイム市場分析</h3>
+              <span class="header-tag">Live Market Data</span>
+            </div>
+            <form id="form-prediction">
+              <div class="api-fetch-banner">
+                <div class="form-row align-center">
+                  <div class="form-group col-4">
+                    <label for="p-ticker">銘柄コード (東証4桁) *</label>
+                    <input type="text" id="p-ticker" required placeholder="例: 6501, 6758, 6857" class="input-text">
+                  </div>
+                  <div class="col-8 mt-btn" style="display:flex; gap:8px;">
+                    <button type="button" id="btn-fetch-live" class="btn btn-primary" style="flex:1;">
+                      ⚡ 市場データ・テクニカル自動取得
+                    </button>
+                    <button type="button" id="btn-view-chart-form" class="btn btn-secondary">
+                      📈 チャート表示
+                    </button>
+                  </div>
+                </div>
+                <div id="fetch-status-msg" class="fetch-status"></div>
+              </div>
+
+
+              <div class="form-row mt-3">
+                <div class="form-group col-8">
+                  <label for="p-name">銘柄名</label>
+                  <input type="text" id="p-name" required placeholder="会社名" class="input-text">
+                </div>
+                <div class="form-group col-4">
+                  <label for="p-sector">セクター</label>
+                  <input type="text" id="p-sector" placeholder="業種" class="input-text">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group col-4">
+                  <label for="p-season">シーズン区分</label>
+                  <input type="text" id="p-season" value="2026Q3" class="input-text">
+                </div>
+                <div class="form-group col-4">
+                  <label for="p-pick-date">ピックアップ日</label>
+                  <input type="date" id="p-pick-date" class="input-text">
+                </div>
+                <div class="form-group col-4">
+                  <label for="p-earnings-date">次回決算予定日 *</label>
+                  <input type="date" id="p-earnings-date" required class="input-text">
+                </div>
+              </div>
+
+              <div class="form-divider"><span>リアルタイム株価 & テクニカル目標設定</span></div>
+
+              <div class="form-row">
+                <div class="form-group col-4">
+                  <label for="p-current-price">現在株価 (円) *</label>
+                  <input type="number" step="0.1" id="p-current-price" required placeholder="自動取得" class="input-text">
+                </div>
+                <div class="form-group col-4">
+                  <label for="p-target-price">目標株価 (円) *</label>
+                  <input type="number" step="0.1" id="p-target-price" required placeholder="自動算出" class="input-text">
+                </div>
+                <div class="form-group col-4">
+                  <label for="p-stop-loss">損切りライン (円) *</label>
+                  <input type="number" step="0.1" id="p-stop-loss" required placeholder="自動算出" class="input-text">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group col-6">
+                  <label for="p-pattern">テクニカル形状パターン *</label>
+                  <select id="p-pattern" class="select-input">
+                    <option value="直近高値ブレイク型">直近高値ブレイク型（レンジ上放れ）</option>
+                    <option value="25日線押し目反発型">25日線押し目反発型（移動平均サポート）</option>
+                    <option value="カップウィズハンドル型">カップウィズハンドル型（取手完成）</option>
+                    <option value="ボリンジャースクイーズ型">ボリンジャースクイーズ型（+2σ拡大）</option>
+                    <option value="ダブルボトム反転型">ダブルボトム反転型（底打ちネックライン突破）</option>
+                  </select>
+                </div>
+                <div class="form-group col-3">
+                  <label for="p-progress">PER (倍)</label>
+                  <input type="number" step="0.1" id="p-progress" placeholder="自動取得" class="input-text">
+                </div>
+                <div class="form-group col-3">
+                  <label for="p-consensus">コンセンサス</label>
+                  <select id="p-consensus" class="select-input">
+                    <option value="上振れ期待">上振れ期待</option>
+                    <option value="中立">中立</option>
+                    <option value="一致見込み">一致見込み</option>
+                    <option value="下振れ懸念">下振れ懸念</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="p-notes">予測根拠・テクニカル考察メモ</label>
+                <textarea id="p-notes" rows="3" class="input-textarea" placeholder="APIから取得したテクニカル指標をもとに考察を入力してください。"></textarea>
+              </div>
+
+              <div class="form-actions">
+                <button type="button" id="btn-calc-preview" class="btn btn-secondary">⚡ 過去勝率と照合プレビュー</button>
+                <button type="submit" class="btn btn-primary">💾 予測リストに登録する</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- チャート波動計算器 & 過去実績照合プレビュー -->
+          <div class="side-column">
+            <!-- 波動計算補助ツール -->
+            <div class="card wave-card">
+              <div class="card-header">
+                <h4>📐 チャート波動計算ツール (目標値自動算出)</h4>
+              </div>
+              <p class="card-desc">市場データから安値A・高値B・押し目Cを自動抽出。クリックで目標株価に即時適用できます。</p>
+              <div class="form-row">
+                <div class="form-group col-4">
+                  <label>安値 A</label>
+                  <input type="number" id="wave-a" placeholder="自動" class="input-text input-sm">
+                </div>
+                <div class="form-group col-4">
+                  <label>高値 B</label>
+                  <input type="number" id="wave-b" placeholder="自動" class="input-text input-sm">
+                </div>
+                <div class="form-group col-4">
+                  <label>押し目 C</label>
+                  <input type="number" id="wave-c" placeholder="自動" class="input-text input-sm">
+                </div>
+              </div>
+              <div class="wave-results">
+                <div class="wave-item" onclick="applyTarget('wave-n')">
+                  <span class="w-name">N計算値 (標準波動)</span>
+                  <span class="w-val" id="wave-n-val">-- 円</span>
+                  <span class="w-apply">適用 ➔</span>
+                </div>
+                <div class="wave-item" onclick="applyTarget('wave-v')">
+                  <span class="w-name">V計算値 (ブレイク強気)</span>
+                  <span class="w-val" id="wave-v-val">-- 円</span>
+                  <span class="w-apply">適用 ➔</span>
+                </div>
+                <div class="wave-item" onclick="applyTarget('wave-e')">
+                  <span class="w-name">E計算値 (超強気ターゲット)</span>
+                  <span class="w-val" id="wave-e-val">-- 円</span>
+                  <span class="w-apply">適用 ➔</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- テクニカル指標リアルタイム値カード -->
+            <div class="card" id="tech-metrics-card" style="display:none;">
+              <div class="card-header">
+                <h4>📊 取得テクニカル指標 (東証日足)</h4>
+              </div>
+              <div class="tech-metrics-grid">
+                <div class="metric-item">
+                  <span class="m-label">25日移動平均線</span>
+                  <strong class="m-val" id="metric-ma25">--</strong>
+                </div>
+                <div class="metric-item">
+                  <span class="m-label">25日線乖離率</span>
+                  <strong class="m-val" id="metric-bias">--</strong>
+                </div>
+                <div class="metric-item">
+                  <span class="m-label">ボリンジャー +2σ</span>
+                  <strong class="m-val" id="metric-bbu">--</strong>
+                </div>
+                <div class="metric-item">
+                  <span class="m-label">ボリンジャー -2σ</span>
+                  <strong class="m-val" id="metric-bbl">--</strong>
+                </div>
+              </div>
+            </div>
+
+            <!-- 予測評価スコアカード -->
+            <div class="card score-card" id="preview-score-card">
+              <div class="card-header">
+                <h4>🎯 予測評価・過去実績照合</h4>
+                <span class="rating-badge" id="preview-rating">--</span>
+              </div>
+              <div class="score-display">
+                <div class="score-dial">
+                  <span class="score-number" id="preview-score">--</span>
+                  <span class="score-unit">/ 100 pt</span>
+                </div>
+                <div class="score-details">
+                  <div class="detail-row">
+                    <span>想定上昇余地:</span>
+                    <strong id="preview-expected-return" class="text-success">--%</strong>
+                  </div>
+                  <div class="detail-row">
+                    <span>想定リスク:</span>
+                    <strong id="preview-risk" class="text-danger">--%</strong>
+                  </div>
+                  <div class="detail-row">
+                    <span>リスクリワード比:</span>
+                    <strong id="preview-rr">--</strong>
+                  </div>
+                </div>
+              </div>
+              <div class="history-match-box">
+                <h5>📚 過去データベース照合</h5>
+            <!-- 100万円資金管理ポジションサイザー -->
+            <div class="card position-card" id="position-sizer-card">
+              <div class="card-header">
+                <h4>💼 100万資金管理ポジションサイザー</h4>
+                <span class="header-tag" style="background:rgba(245,158,11,0.15); color:var(--accent-amber);">100万➔600万設計</span>
+              </div>
+              <p class="card-desc">1トレード許容損失から最適株数・必要資金を自動算出（現在株価・目標・損切りと連動）</p>
+              
+              <div class="form-row">
+                <div class="form-group col-6">
+                  <label for="pos-capital">総運用資金 (円)</label>
+                  <input type="number" id="pos-capital" value="1000000" step="50000" class="input-text input-sm">
+                </div>
+                <div class="form-group col-6">
+                  <label for="pos-risk-pct">許容リスク (%)</label>
+                  <input type="number" id="pos-risk-pct" value="2.0" step="0.5" class="input-text input-sm">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group col-12">
+                  <label>取引スタイル / レバレッジ</label>
+                  <div class="leverage-btn-group">
+                    <button type="button" class="btn-lev active" data-lev="1.0">現物 (1倍)</button>
+                    <button type="button" class="btn-lev" data-lev="2.0">信用 (2倍)</button>
+                    <button type="button" class="btn-lev" data-lev="3.0">信用 (3倍)</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 計算結果サマリー -->
+              <div class="pos-result-box" id="pos-result-box">
+                <div class="pos-row">
+                  <span class="pos-label">推奨購入ロット:</span>
+                  <strong class="pos-val-primary" id="pos-res-shares">-- 株</strong>
+                </div>
+                <div class="pos-row">
+                  <span class="pos-label">必要代金 (証拠金):</span>
+                  <span class="pos-val" id="pos-res-margin">-- 円</span>
+                </div>
+                <div class="pos-row">
+                  <span class="pos-label">損切り時 最大損失:</span>
+                  <span class="pos-val text-danger" id="pos-res-loss">-- 円</span>
+                </div>
+                <div class="pos-row">
+                  <span class="pos-label">利確時 想定利益:</span>
+                  <span class="pos-val text-success" id="pos-res-profit">-- 円</span>
+                </div>
+                <div class="pos-row">
+                  <span class="pos-label">リスクリワード比:</span>
+                  <span class="pos-val text-cyan" id="pos-res-rr">--</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- タブ3: 次期シーズン学習・分析レポート -->
+      <section id="tab-insights" class="tab-pane">
+        <div class="insights-header">
+          <div>
+            <h3>📊 次期決算シーズンに向けた自己学習・分析インサイト</h3>
+            <p class="subtitle">過去の予測と決算後1週間の実績データを蓄積・分析し、次の決算シーズンで勝率を最大化するための統計資料</p>
+          </div>
+          <button id="btn-export-md" class="btn btn-secondary">📄 Markdownレポートを表示</button>
+        </div>
+
+        <div class="two-col-layout">
+          <!-- テクニカル別実績ランキング -->
+          <div class="card">
+            <div class="card-header">
+              <h4>🏆 テクニカルパターン別 勝率・実績ランキング</h4>
+            </div>
+            <div class="table-wrapper">
+              <table class="data-table" id="table-patterns">
+                <thead>
+                  <tr>
+                    <th>順位</th>
+                    <th>テクニカルパターン</th>
+                    <th>検証数</th>
+                    <th>勝率</th>
+                    <th>平均最大上昇率</th>
+                    <th>平均確定損益</th>
+                  </tr>
+                </thead>
+                <tbody id="patterns-tbody">
+                  <!-- 動的に生成 -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 業績進捗率別パフォーマンス -->
+          <div class="card">
+            <div class="card-header">
+              <h4>📈 業績進捗率別の勝率比較</h4>
+            </div>
+            <div class="table-wrapper">
+              <table class="data-table" id="table-progress">
+                <thead>
+                  <tr>
+                    <th>進捗率帯</th>
+                    <th>検証数</th>
+                    <th>勝率</th>
+                    <th>平均確定損益</th>
+                  </tr>
+                </thead>
+                <tbody id="progress-tbody">
+                  <!-- 動的に生成 -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 具体的アクションプランと敗因分析 -->
+        <div class="two-col-layout mt-4">
+          <div class="card">
+            <div class="card-header">
+              <h4>💡 次期決算シーズンへの戦略的フィードバック</h4>
+            </div>
+            <ul class="insights-list" id="insights-ul">
+              <!-- 動的生成 -->
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h4>⚠️ 敗戦事例からの教訓（出尽くし・損切りパターン）</h4>
+            </div>
+            <div class="reviews-list" id="reviews-div">
+              <!-- 動的生成 -->
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- 結果記録用モーダル -->
+    <div class="modal-overlay" id="result-modal">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="modal-title">📝 決算後1週間 結果記録</h3>
+          <button class="btn-close" onclick="closeResultModal()">&times;</button>
+        </div>
+        <form id="form-result">
+          <input type="hidden" id="r-pred-id">
+          <input type="hidden" id="r-ticker">
+          <div class="stock-summary-box" id="modal-stock-summary">
+            <!-- 銘柄の事前予測サマリーを表示 -->
+          </div>
+
+          <div class="api-auto-fill-bar">
+            <button type="button" id="btn-fetch-post-prices" class="btn btn-secondary w-100">
+              ⚡ 東証の株価データから「決算後1週間の実績値」を自動取得
+            </button>
+            <div id="result-fetch-status" class="fetch-status"></div>
+          </div>
+
+          <div class="form-row mt-3">
+            <div class="form-group col-6">
+              <label for="r-actual-date">実際の決算日 *</label>
+              <input type="date" id="r-actual-date" required class="input-text">
+            </div>
+            <div class="form-group col-6">
+              <label for="r-result-type">決算発表内容 *</label>
+              <select id="r-result-type" class="select-input">
+                <option value="大幅上方修正+増配">大幅上方修正+増配 (超サプライズ)</option>
+                <option value="通期上方修正">通期上方修正</option>
+                <option value="コンセンサス超過">コンセンサス超過</option>
+                <option value="会社予想据置">会社予想据置 (無風/出尽くし警戒)</option>
+                <option value="下方修正/失望">下方修正 / 失望売り</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-divider"><span>決算発表後 1週間の株価推移 (円)</span></div>
+
+          <div class="form-row">
+            <div class="form-group col-3">
+              <label for="r-post-open">翌日寄付値 *</label>
+              <input type="number" step="0.1" id="r-post-open" required placeholder="自動取得可" class="input-text">
+            </div>
+            <div class="form-group col-3">
+              <label for="r-week-high">1週間最高値 *</label>
+              <input type="number" step="0.1" id="r-week-high" required placeholder="自動取得可" class="input-text">
+            </div>
+            <div class="form-group col-3">
+              <label for="r-week-low">1週間最安値 *</label>
+              <input type="number" step="0.1" id="r-week-low" required placeholder="自動取得可" class="input-text">
+            </div>
+            <div class="form-group col-3">
+              <label for="r-week-close">1週間後終値 *</label>
+              <input type="number" step="0.1" id="r-week-close" required placeholder="自動取得可" class="input-text">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="r-review-notes">成因分析・反省メモ (次のシーズンへの教訓)</label>
+            <textarea id="r-review-notes" rows="3" class="input-textarea" placeholder="例: 決算翌日は寄り天となったが2日目から海外買いでブレイク。目標株価を達成。"></textarea>
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" onclick="closeResultModal()">キャンセル</button>
+            <button type="submit" class="btn btn-primary">✅ 結果を確定・学習DBに記録</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 決算直前 注目銘柄スクリーナーモーダル -->
+    <div class="modal-overlay" id="auto-screen-modal">
+      <div class="modal-card modal-lg">
+        <div class="modal-header">
+          <h3>🔍 決算直前スクリーニング：決算トレード注目銘柄</h3>
+          <button class="btn-close" onclick="closeAutoScreenModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="card-desc">東証全銘柄（JPX公式決算発表スケジュール）から「決算日が当日から14日後」「出来高・値動きあり」「テクニカル上昇形状」「リスクリワード良好」の条件を決算トレード特化の7カテゴリで総合スコアリングし、注目銘柄をリアルタイム発掘しました。</p>
+          <div id="auto-screen-loading" style="text-align:center; padding:30px;">
+            <div class="spinner"></div>
+            <p style="margin-top:10px; color:var(--text-cyan); font-weight:600;">東証全銘柄の決算日（当日から14日後）をスキャン → 該当銘柄のテクニカル詳細分析中...</p>
+          </div>
+          <div id="auto-screen-results" style="display:none;">
+            <!-- 3大戦略フィルタータブ -->
+            <div class="strategy-filter-tabs">
+              <button type="button" class="strat-tab-btn active" data-strategy="ALL" onclick="filterOpportunitiesByStrategy('ALL')">
+                🌐 すべて (<span id="strat-count-all">0</span>)
+              </button>
+              <button type="button" class="strat-tab-btn strat-btn-a" data-strategy="A" onclick="filterOpportunitiesByStrategy('A')">
+                ⚡ 戦略A: 決算前モメンタム (<span id="strat-count-a">0</span>)
+              </button>
+              <button type="button" class="strat-tab-btn strat-btn-b" data-strategy="B" onclick="filterOpportunitiesByStrategy('B')">
+                🎯 戦略B: 決算またぎ上方修正 (<span id="strat-count-b">0</span>)
+              </button>
+              <button type="button" class="strat-tab-btn strat-btn-c" data-strategy="C" onclick="filterOpportunitiesByStrategy('C')">
+                🚀 戦略C: 決算後PEAD (<span id="strat-count-c">0</span>)
+              </button>
+            </div>
+
+            <!-- 戦略解説ガイドバナー -->
+            <div id="strategy-guide-banner" class="strategy-guide-banner">
+              <span id="strat-guide-icon">💡</span>
+              <span id="strat-guide-text">プロの決算トレード3大戦略に基づき銘柄を分類中。タブをクリックして戦略別に絞り込めます。</span>
+            </div>
+
+            <!-- 一括登録コントロールバー -->
+            <div class="batch-action-bar">
+              <label class="select-all-label">
+                <input type="checkbox" id="chk-select-all-opps" checked>
+                <span>表示中の銘柄をすべて選択 (<span id="opps-selected-count">0</span>件)</span>
+              </label>
+              <div class="batch-btns">
+                <button type="button" id="btn-batch-register-selected" class="btn btn-primary btn-sm">
+                  🚀 選択した銘柄を一括登録する
+                </button>
+              </div>
+            </div>
+
+            <div class="opportunities-grid" id="opportunities-container">
+              <!-- 動的生成 -->
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeAutoScreenModal()">閉じる</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- テクニカル分析＆ローソク足チャートモーダル -->
+    <div class="modal-overlay" id="chart-modal">
+      <div class="modal-card modal-xl">
+        <div class="modal-header">
+          <div class="chart-title-area">
+            <h3 id="chart-stock-title">📈 テクニカルチャート</h3>
+            <span class="header-tag" id="chart-pattern-badge">パターン</span>
+            <span class="live-indicator"><span class="live-dot"></span> 日足ローソク足 & 出来高</span>
+          </div>
+          <button class="btn-close" onclick="closeChartModal()">&times;</button>
+        </div>
+        <div class="modal-body chart-modal-body">
+          <div id="chart-loading" style="text-align:center; padding:50px;">
+            <div class="spinner"></div>
+            <p style="margin-top:10px; color:var(--text-cyan); font-weight:600;">東証日足データ＆テクニカル指標を描画中...</p>
+          </div>
+          <div id="chart-content-area" style="display:none;">
+            <!-- チャート上の主要数値サマリーバー -->
+            <div class="chart-summary-bar">
+              <div class="cs-item">
+                <span class="cs-label">現在株価</span>
+                <strong class="cs-val" id="cs-price">-- 円</strong>
+              </div>
+              <div class="cs-item">
+                <span class="cs-label">目標株価 (利確)</span>
+                <strong class="cs-val text-cyan" id="cs-target">-- 円</strong>
+              </div>
+              <div class="cs-item">
+                <span class="cs-label">損切りライン</span>
+                <strong class="cs-val text-danger" id="cs-stop">-- 円</strong>
+              </div>
+              <div class="cs-item">
+                <span class="cs-label">想定上昇率</span>
+                <strong class="cs-val text-success" id="cs-gain">--%</strong>
+              </div>
+              <div class="cs-item">
+                <span class="cs-label">リスクリワード</span>
+                <strong class="cs-val" id="cs-rr">--</strong>
+              </div>
+              <div class="cs-item">
+                <span class="cs-label">次回決算予定日</span>
+                <strong class="cs-val" id="cs-earnings" style="color:var(--accent-amber);">--</strong>
+              </div>
+            </div>
+
+            <!-- チャート本体とテクニカル解説の2カラム -->
+            <div class="chart-canvas-layout">
+              <!-- 左: Canvasチャート -->
+              <div class="canvas-container">
+                <!-- ホバー時のツールチップ表示バー -->
+                <div class="chart-tooltip-bar" id="chart-hover-bar">
+                  日付: <span id="th-date">--</span> | 
+                  始: <span id="th-open">--</span> | 
+                  高: <span id="th-high">--</span> | 
+                  安: <span id="th-low">--</span> | 
+                  終: <span id="th-close">--</span> | 
+                  25MA: <span id="th-ma25" style="color:#06b6d4;">--</span> | 
+                  75MA: <span id="th-ma75" style="color:#f59e0b;">--</span> | 
+                  出来高: <span id="th-vol">--</span>
+                </div>
+                <!-- チャートCanvas -->
+                <canvas id="main-stock-canvas" width="780" height="420"></canvas>
+                <!-- 凡例 -->
+                <div class="chart-legend">
+                  <span class="legend-item"><span class="legend-color legend-candle-up"></span> 陽線</span>
+                  <span class="legend-item"><span class="legend-color legend-candle-down"></span> 陰線</span>
+                  <span class="legend-item"><span class="legend-color legend-ma25"></span> 25日線</span>
+                  <span class="legend-item"><span class="legend-color legend-ma75"></span> 75日線</span>
+                  <span class="legend-item"><span class="legend-color legend-bb"></span> ボリンジャー±2σ</span>
+                  <span class="legend-item"><span class="legend-color legend-target"></span> 目標値(点線)</span>
+                  <span class="legend-item"><span class="legend-color legend-stop"></span> 損切り(点線)</span>
+                </div>
+              </div>
+
+              <!-- 右: 根拠となるテクニカル分析＆診断パネル -->
+              <div class="chart-diagnosis-panel">
+                <h4>💡 根拠となるテクニカル診断</h4>
+                <ul class="diagnosis-list" id="chart-diagnosis-list">
+                  <!-- 動的生成 -->
+                </ul>
+
+                <div class="chart-wave-section">
+                  <h5>📐 チャート波動計算 (一目均衡表)</h5>
+                  <div class="wave-matrix">
+                    <div><span>安値 A:</span> <strong id="cw-a">--</strong></div>
+                    <div><span>高値 B:</span> <strong id="cw-b">--</strong></div>
+                    <div><span>押し目 C:</span> <strong id="cw-c">--</strong></div>
+                  </div>
+                  <div class="wave-targets-list">
+                    <div><span>N計算値 (基本):</span> <strong id="cw-n">-- 円</strong></div>
+                    <div><span>V計算値 (ブレイク):</span> <strong id="cw-v">-- 円</strong></div>
+                    <div><span>E計算値 (大相場):</span> <strong id="cw-e">-- 円</strong></div>
+                  </div>
+                </div>
+
+                <div class="chart-action-box">
+                  <button type="button" id="btn-chart-adopt" class="btn btn-primary w-100">
+                    🎯 この銘柄を予測リストに登録
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeChartModal()">閉じる</button>
+        </div>
+      </div>
+    </div>
+
+
+
+    <!-- 独立ポジションサイザー計算モーダル -->
+    <div class="modal-overlay" id="position-modal">
+      <div class="modal-card modal-md">
+        <div class="modal-header">
+          <div class="chart-title-area">
+            <h3 id="pos-modal-title">💼 100万円資金管理ポジションサイザー</h3>
+            <span class="header-tag" style="background:rgba(245,158,11,0.15); color:var(--accent-amber);">100万➔600万設計</span>
+          </div>
+          <button class="btn-close" onclick="closePositionModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="card-desc">1トレードの許容リスク（資産の2%等）に基づき、この銘柄で何株買うべきかを厳密に算出します。</p>
+          
+          <div class="pos-modal-stock-info" id="pos-modal-stock-info">
+            <!-- 銘柄名・現在値・目標・損切り -->
+          </div>
+
+          <div class="form-row">
+            <div class="form-group col-6">
+              <label for="pos-m-capital">総運用資金 (円)</label>
+              <input type="number" id="pos-m-capital" value="1000000" step="50000" class="input-text">
+            </div>
+            <div class="form-group col-6">
+              <label for="pos-m-risk">許容リスク (%)</label>
+              <input type="number" id="pos-m-risk" value="2.0" step="0.5" class="input-text">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>取引スタイル / レバレッジ</label>
+            <div class="leverage-btn-group">
+              <button type="button" class="btn-lev-m active" data-lev="1.0">現物 (1倍)</button>
+              <button type="button" class="btn-lev-m" data-lev="2.0">信用 (2倍)</button>
+              <button type="button" class="btn-lev-m" data-lev="3.0">信用 (3倍)</button>
+            </div>
+          </div>
+
+          <div class="pos-result-box" style="margin-top:16px;">
+            <div class="pos-row">
+              <span class="pos-label">推奨購入ロット:</span>
+              <strong class="pos-val-primary" id="pos-m-shares">-- 株</strong>
+            </div>
+            <div class="pos-row">
+              <span class="pos-label">必要購入代金 (証拠金):</span>
+              <span class="pos-val" id="pos-m-margin">-- 円</span>
+            </div>
+            <div class="pos-row">
+              <span class="pos-label">損切り時 最大想定損失:</span>
+              <span class="pos-val text-danger" id="pos-m-loss">-- 円</span>
+            </div>
+            <div class="pos-row">
+              <span class="pos-label">利確目標 達成時利益:</span>
+              <span class="pos-val text-success" id="pos-m-profit">-- 円</span>
+            </div>
+            <div class="pos-row">
+              <span class="pos-label">リスクリワード比:</span>
+              <span class="pos-val text-cyan" id="pos-m-rr">--</span>
+            </div>
+            <div class="pos-row">
+              <span class="pos-label">資金占有率:</span>
+              <span class="pos-val" id="pos-m-cap-ratio">-- %</span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick="closePositionModal()">閉じる</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Markdownレポート閲覧モーダル -->
+    <div class="modal-overlay" id="markdown-modal">
+      <div class="modal-card modal-lg">
+        <div class="modal-header">
+          <h3>📄 次期決算シーズン分析レポート (Markdown)</h3>
+          <button class="btn-close" onclick="closeMarkdownModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <textarea id="markdown-content" rows="18" class="input-textarea code-font" readonly></textarea>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick="copyMarkdown()">📋 クリップボードにコピー</button>
+          <button type="button" class="btn btn-primary" onclick="closeMarkdownModal()">閉じる</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
