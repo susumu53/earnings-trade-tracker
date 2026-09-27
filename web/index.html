@@ -15,10 +15,12 @@
     <header class="navbar">
       <div class="brand">
         <div class="logo-icon">📈</div>
-        <div>
-          <h1>EarningsTrade <span class="accent-text">Tracker</span> <span class="live-indicator"><span class="live-dot"></span> LIVE DATA API</span></h1>
-          <p class="subtitle">東証リアルタイム市場データ連携 ➔ 決算2週間前予測 ➔ 決算後1週間結果自動検証 ➔ 自己学習システム</p>
-        </div>
+          <h1>EarningsTrade <span class="accent-text">Tracker</span> 
+            <span class="live-indicator" id="live-indicator-badge"><span class="live-dot"></span> LIVE DATA API</span>
+            <span id="static-mode-badge" style="display:none; background:rgba(6,182,212,0.15); border:1px solid rgba(6,182,212,0.4); color:#38bdf8; padding:3px 10px; border-radius:12px; font-size:11px; margin-left:8px; vertical-align:middle;">
+              🌐 GitHub Pages (自動更新) <span id="static-updated-time" style="color:#94a3b8; font-size:10px; margin-left:4px;"></span>
+            </span>
+          </h1>
       </div>
       <div class="nav-actions">
         <select id="season-selector" class="select-input">

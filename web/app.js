@@ -7,14 +7,56 @@ let allRecords = [];
 let currentFilter = 'all';
 let currentOpportunities = [];
 let currentChartData = null;
+let staticDashboardData = null;
+let isStaticMode = false;
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   initTabs();
   initFormCalculations();
   initMarketDataHandlers();
   initEventListeners();
+  await checkAndInitStaticMode();
   loadData();
 });
+
+// 静的モード（GitHub Pages）の判定とデータロード
+async function checkAndInitStaticMode() {
+  const isGitHub = window.location.hostname.endsWith('github.io') || window.location.protocol === 'file:';
+  if (isGitHub) {
+    await loadStaticData();
+  }
+}
+
+async function loadStaticData() {
+  try {
+    const res = await fetch('./data/dashboard_data.json');
+    if (res.ok) {
+      const data = await res.json();
+      enableStaticMode(data);
+      return true;
+    }
+  } catch (e) {
+    console.warn('Failed to load static dashboard data:', e);
+  }
+  return false;
+}
+
+function enableStaticMode(data) {
+  isStaticMode = true;
+  staticDashboardData = data;
+  const liveBadge = document.getElementById('live-indicator-badge');
+  if (liveBadge) liveBadge.style.display = 'none';
+  const staticBadge = document.getElementById('static-mode-badge');
+  if (staticBadge) {
+    staticBadge.style.display = 'inline-block';
+    const timeSpan = document.getElementById('static-updated-time');
+    if (timeSpan && data.updated_at) {
+      timeSpan.textContent = `(更新: ${data.updated_at})`;
+    }
+  }
+  const btnClear = document.getElementById('btn-clear-db');
+  if (btnClear) btnClear.style.display = 'none';
+}
 
 // タブ切り替え
 function initTabs() {
@@ -221,9 +263,29 @@ async function openAutoScreenModal() {
   currentOpportunities = [];
   currentSelectedStrategy = 'ALL';
 
-  // 既存の統計バーがあれば削除
-  const existingStats = document.querySelector('.scan-stats-bar');
-  if (existingStats) existingStats.remove();
+  // 静的モード（GitHub Pages）の場合はキャッシュ済みデータから即座に表示
+  if (isStaticMode && staticDashboardData && staticDashboardData.opportunities) {
+    loading.style.display = 'none';
+    resultsDiv.style.display = 'block';
+    currentOpportunities = staticDashboardData.opportunities;
+    const scanStats = staticDashboardData.scan_stats;
+    if (scanStats) {
+      const statsHtml = `<div class="scan-stats-bar" style="background:rgba(6,182,212,0.08); border:1px solid rgba(6,182,212,0.2); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--text-muted);">
+        📊 GitHub Actions 自動解析: 東証 <strong>${scanStats.total_scanned || '---'}</strong> 銘柄走査 → 決算日該当 <strong>${scanStats.matched || '---'}</strong> 銘柄 → 3大戦略スコア基準通過 <strong>${currentOpportunities.length}</strong> 銘柄 (更新: ${staticDashboardData.updated_at || '最新'})
+      </div>`;
+      const tabsEl = document.querySelector('.strategy-filter-tabs');
+      if (tabsEl) tabsEl.insertAdjacentHTML('beforebegin', statsHtml);
+    }
+    updateStrategyTabCounts();
+    filterOpportunitiesByStrategy('ALL');
+    const btnBatch = document.getElementById('btn-batch-register-selected');
+    if (btnBatch) {
+      btnBatch.onclick = () => {
+        alert('💡 GitHub Pagesは閲覧専用モードです。予測の登録・追跡機能を利用するには、ローカル環境（PC起動）でご利用ください。');
+      };
+    }
+    return;
+  }
 
   try {
     const res = await fetch('/api/stock/auto-screen');
@@ -261,7 +323,12 @@ async function openAutoScreenModal() {
     document.getElementById('btn-batch-register-selected').onclick = handleBatchRegister;
 
   } catch (err) {
-    loading.innerHTML = `<p style="color:var(--accent-rose);">自動発掘エラー: ${err.message}</p>`;
+    if (staticDashboardData && staticDashboardData.opportunities) {
+      enableStaticMode(staticDashboardData);
+      openAutoScreenModal();
+    } else {
+      loading.innerHTML = `<p style="color:var(--accent-rose);">自動発掘エラー: ${err.message}</p>`;
+    }
   }
 }
 
@@ -486,6 +553,10 @@ function closeAutoScreenModal() {
 
 // 単一銘柄の登録
 async function registerOpportunityDirectly(opp) {
+  if (isStaticMode) {
+    alert('💡 GitHub Pagesは閲覧専用モードです。予測リストへの追加や記録の保存はローカル環境（PC起動）でご利用ください。');
+    return;
+  }
   const season = document.getElementById('season-selector').value || '2026Q3';
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -553,6 +624,14 @@ async function openChartModal(ticker) {
   loading.style.display = 'block';
   content.style.display = 'none';
 
+  // 静的モード（GitHub Pages）またはキャッシュに該当銘柄のチャートがある場合
+  if (staticDashboardData && staticDashboardData.charts && staticDashboardData.charts[ticker]) {
+    const data = staticDashboardData.charts[ticker];
+    currentChartData = data;
+    renderChartModalContent(data, loading, content);
+    return;
+  }
+
   try {
     const res = await fetch(`/api/stock/chart?ticker=${encodeURIComponent(ticker)}&period=6mo`);
     const json = await res.json();
@@ -563,6 +642,22 @@ async function openChartModal(ticker) {
 
     const data = json.data;
     currentChartData = data;
+    renderChartModalContent(data, loading, content);
+
+  } catch (err) {
+    if (staticDashboardData && staticDashboardData.charts && staticDashboardData.charts[ticker]) {
+      const data = staticDashboardData.charts[ticker];
+      currentChartData = data;
+      renderChartModalContent(data, loading, content);
+    } else {
+      loading.innerHTML = `<p style="color:var(--accent-rose);">チャート取得エラー: ${err.message}</p>`;
+    }
+  }
+}
+
+// チャートモーダルの中身を描画する共通ヘルパー
+function renderChartModalContent(data, loading, content) {
+
 
     // ヘッダー情報セット
     document.getElementById('chart-stock-title').textContent = `[${data.ticker}] ${data.name}`;
@@ -606,10 +701,6 @@ async function openChartModal(ticker) {
     setTimeout(() => {
       renderCandleChart(data.candles, data);
     }, 50);
-
-  } catch (err) {
-    loading.innerHTML = `<p style="color:var(--accent-rose);">チャートエラー: ${err.message}</p>`;
-  }
 }
 
 function closeChartModal() {
@@ -1084,6 +1175,11 @@ async function triggerPreviewEvaluation() {
 async function handlePredictionSubmit(e) {
   e.preventDefault();
 
+  if (isStaticMode) {
+    alert('💡 GitHub Pagesは閲覧専用モードです。予測リストへの追加や編集はローカル環境（PC起動）でご利用ください。');
+    return;
+  }
+
   const cur = parseFloat(document.getElementById('p-current-price').value);
   const target = parseFloat(document.getElementById('p-target-price').value);
   const stop = parseFloat(document.getElementById('p-stop-loss').value);
@@ -1132,16 +1228,30 @@ async function handlePredictionSubmit(e) {
 
 // データの読み込み
 async function loadData() {
+  if (isStaticMode && staticDashboardData) {
+    allRecords = staticDashboardData.records || [];
+    renderTable(allRecords);
+    updateKPIs(allRecords);
+    return;
+  }
+
   const season = document.getElementById('season-selector').value;
   const url = season ? `/api/records?season_id=${encodeURIComponent(season)}` : '/api/records';
 
   try {
     const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     allRecords = await res.json();
     renderTable(allRecords);
     updateKPIs(allRecords);
   } catch (err) {
-    console.error('Load data error:', err);
+    console.warn('API connection failed, falling back to static dashboard data:', err);
+    const loaded = await loadStaticData();
+    if (loaded && staticDashboardData) {
+      allRecords = staticDashboardData.records || [];
+      renderTable(allRecords);
+      updateKPIs(allRecords);
+    }
   }
 }
 
@@ -1239,6 +1349,10 @@ async function handleResultSubmit(e) {
 
 // 削除処理
 async function handleDelete(predId) {
+  if (isStaticMode) {
+    alert('💡 GitHub Pagesは閲覧専用モードです。データの削除はローカル環境（PC起動）でご利用ください。');
+    return;
+  }
   if (confirm('この予測および結果データを削除しますか？')) {
     try {
       const res = await fetch(`/api/predictions/${predId}`, { method: 'DELETE' });
@@ -1255,15 +1369,25 @@ async function handleDelete(predId) {
 
 // シーズン分析の読み込みと描画
 async function loadAnalysis() {
+  if (isStaticMode && staticDashboardData && staticDashboardData.analysis) {
+    renderAnalysis(staticDashboardData.analysis);
+    return;
+  }
+
   const season = document.getElementById('season-selector').value;
   const url = season ? `/api/analysis?season_id=${encodeURIComponent(season)}` : '/api/analysis';
 
   try {
     const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     renderAnalysis(data);
   } catch (err) {
-    console.error('Analysis error:', err);
+    if (staticDashboardData && staticDashboardData.analysis) {
+      renderAnalysis(staticDashboardData.analysis);
+    } else {
+      console.error('Analysis error:', err);
+    }
   }
 }
 

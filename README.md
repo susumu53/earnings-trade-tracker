@@ -93,21 +93,31 @@ python main.py
 
 ---
 
-## ☁️ クラウド公開 (Render無料デプロイ)
+## 🌐 GitHub Pages 公開（完全GitHub完結・外部登録不要）
 
-本リポジトリは [Render](https://render.com) の無料プランに対応しています。GitHubと連携するだけで、インターネット上にWebアプリとして公開できます。
+本リポジトリは **GitHub Actions + GitHub Pages** による完全自動デプロイに対応しています。外部サーバーや外部サービスの登録は一切不要で、GitHub内だけでWebダッシュボードを公開・閲覧できます。
 
-### デプロイ手順（3ステップ）:
-1. **[Render](https://dashboard.render.com/) にサインアップ / ログイン**（GitHubアカウントでログイン推奨）
-2. **「New +」→「Web Service」をクリック**
-   - 連携済みリポジトリ一覧から `earnings-trade-tracker` を選択
-3. **設定を入力して「Deploy Web Service」をクリック**
-   - **Name**: `earnings-trade-tracker` (任意)
-   - **Runtime**: `Python 3`
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `python main.py`
-   - **Instance Type**: `Free` (無料)
-4. 数分でビルドが完了し、`https://earnings-trade-tracker-xxxx.onrender.com` の公開URLが発行されます！
+### 🌟 特徴
+- **完全無料・サーバー維持不要**: GitHubの標準機能だけで永続稼働。
+- **定期自動更新（GitHub Actions）**: 平日の朝（08:30 JST）と夕方（17:00 JST）に自動で最新の東証決算・市場データをスキャンし、ダッシュボードを再生成・自動デプロイ。
+- **手動即時実行**: GitHubの「Actions」タブから「Run workflow」ボタンを押せば、いつでも最新データに即時更新可能。
+
+### 🚀 GitHub Pages の有効化手順（1分・3ステップ）
+1. GitHubリポジトリの **[Settings]** タブを開きます。
+2. 左メニューの **[Pages]** をクリックします。
+3. **Build and deployment** の **Source** を **「GitHub Actions」** に変更します。
+4. 数分待つと自動でビルド＆デプロイが完了し、公開URL（`https://susumu53.github.io/earnings-trade-tracker/`）が発行されます！
+
+---
+
+## ☁️ クラウド公開 (Render無料デプロイ - 動的サーバー)
+
+バックエンドの全機能（動的な新規予測登録・削除・手動リアルタイムフェッチAPI）を含めて常時稼働サーバーとして公開したい場合は、Render等のWebサービスにも対応しています。
+
+### デプロイ手順:
+1. [Render](https://dashboard.render.com/) にGitHubでログイン
+2. 「New +」→「Web Service」で `earnings-trade-tracker` を選択
+3. Start Command: `python main.py` / Plan: `Free` でデプロイ
 
 ---
 
