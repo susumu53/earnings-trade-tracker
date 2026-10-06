@@ -993,36 +993,35 @@ function renderTable(records) {
     }
 
     tr.innerHTML = `
-      <td>${statusHtml}</td>
-      <td class="stock-clickable-cell" onclick="jumpToRealtimeAnalysis('${r.ticker}')" title="クリックしてリアルタイム分析へジャンプ">
-        <strong class="stock-jump-link">${r.ticker} ↗</strong><br>
-        <span style="font-size:12px; color:var(--text-muted);">${r.name}</span>
+      <td class="col-cell-status" data-label="状態">${statusHtml}</td>
+      <td class="stock-clickable-cell col-cell-stock" data-label="銘柄" onclick="jumpToRealtimeAnalysis('${r.ticker}')" title="クリックしてリアルタイム分析へジャンプ">
+        <strong class="stock-jump-link">${r.ticker} ↗</strong>
+        <span class="stock-name-label">${r.name}</span>
       </td>
-      <td>${r.earnings_date}</td>
-      <td onclick="jumpToRealtimeAnalysis('${r.ticker}')" style="cursor:pointer;" title="クリックしてリアルタイム分析へジャンプ">
-        <span style="font-size:12px;">${r.technical_pattern}</span>
+      <td class="col-cell-date" data-label="決算日">${r.earnings_date}</td>
+      <td class="col-cell-tech" data-label="テクニカル" onclick="jumpToRealtimeAnalysis('${r.ticker}')" style="cursor:pointer;" title="クリックしてリアルタイム分析へジャンプ">
+        <span class="tech-pattern-text">${r.technical_pattern}</span>
       </td>
-      <td onclick="jumpToRealtimeAnalysis('${r.ticker}')" style="cursor:pointer;" title="クリックしてリアルタイム分析へジャンプ">
-        <span style="font-family:var(--font-mono);">${r.current_price.toLocaleString()}円</span> ➔ 
-        <strong style="font-family:var(--font-mono); color:var(--accent-cyan);">${r.target_price.toLocaleString()}円</strong>
+      <td class="col-cell-target" data-label="目標株価" onclick="jumpToRealtimeAnalysis('${r.ticker}')" style="cursor:pointer;" title="クリックしてリアルタイム分析へジャンプ">
+        <span class="price-flow"><span class="price-curr">${r.current_price.toLocaleString()}円</span> ➔ <strong class="price-tgt">${r.target_price.toLocaleString()}円</strong></span>
       </td>
-      <td><strong class="text-success">+${r.expected_return_pct}%</strong></td>
-      <td><span style="font-family:var(--font-mono); color:var(--accent-rose);">${r.stop_loss.toLocaleString()}円</span></td>
-      <td><span style="font-family:var(--font-mono);">1 : ${r.risk_reward_ratio}</span></td>
-      <td><span style="font-size:12px;">${r.consensus_status || '中立'}</span></td>
-      <td>${resultColHtml}</td>
-      <td>
-        <div style="display:flex; gap:6px; flex-wrap:nowrap;">
-          <button class="btn btn-secondary btn-sm" onclick="jumpToRealtimeAnalysis('${r.ticker}')" title="リアルタイム分析へジャンプして最新データを取得">
+      <td class="col-cell-gain" data-label="想定上昇率"><strong class="text-success gain-pill">+${r.expected_return_pct}%</strong></td>
+      <td class="col-cell-stop" data-label="損切り"><span class="stop-loss-val">${r.stop_loss.toLocaleString()}円</span></td>
+      <td class="col-cell-rr" data-label="RR比"><span class="rr-val">1 : ${r.risk_reward_ratio}</span></td>
+      <td class="col-cell-consensus" data-label="コンセンサス"><span class="consensus-val">${r.consensus_status || '中立'}</span></td>
+      <td class="col-cell-result" data-label="結果">${resultColHtml}</td>
+      <td class="col-cell-actions" data-label="操作">
+        <div class="row-action-btns">
+          <button class="btn btn-secondary btn-sm btn-action-analyze" onclick="jumpToRealtimeAnalysis('${r.ticker}')" title="リアルタイム分析へジャンプして最新データを取得">
             🔍 分析
           </button>
-          <button class="btn btn-secondary btn-sm" onclick="openChartModal('${r.ticker}')" title="テクニカルチャートを表示">
-            📈
+          <button class="btn btn-secondary btn-sm btn-action-chart" onclick="openChartModal('${r.ticker}')" title="テクニカルチャートを表示">
+            📈 チャート
           </button>
-          <button class="btn btn-secondary btn-sm" onclick="openResultModal(${r.pred_id})">
+          <button class="btn btn-secondary btn-sm btn-action-result" onclick="openResultModal(${r.pred_id})">
             ${r.status === 'completed' ? '修正' : '📝 結果記録'}
           </button>
-          <button class="btn btn-danger-outline btn-sm" onclick="handleDelete(${r.pred_id})">🗑️</button>
+          <button class="btn btn-danger-outline btn-sm btn-action-del" onclick="handleDelete(${r.pred_id})" title="削除">🗑️</button>
         </div>
       </td>
     `;
