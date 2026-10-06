@@ -28,6 +28,25 @@ sys.path.append(BASE_DIR)
 from tools.db import init_db
 from tools.auto_screener import auto_screen_upcoming_opportunities
 from tools.earnings_scanner import scan_earnings_dates_bulk
+try:
+    from tools.universe import get_stock_info
+except ImportError:
+    get_stock_info = None
+
+# 英語業種の日本語フォールバック変換辞書
+SECTOR_JA_MAP = {
+    "Consumer Cyclical": "一般消費財・小売",
+    "Consumer Defensive": "生活必需品・小売",
+    "Technology": "情報通信・IT",
+    "Communication Services": "サービス・通信",
+    "Healthcare": "医薬品・ヘルスケア",
+    "Industrials": "機械・製造・産業",
+    "Financial Services": "金融・保険",
+    "Basic Materials": "素材・化学",
+    "Real Estate": "不動産",
+    "Energy": "エネルギー・資源",
+    "Utilities": "電力・ガス"
+}
 
 
 def get_upcoming_week_dates() -> Dict[str, Any]:
@@ -59,6 +78,21 @@ def generate_note_markdown(opportunities: List[Dict[str, Any]], week_info: Dict[
     """note記事用の洗練されたMarkdownテキストを生成"""
     today_str = week_info["today"].strftime("%Y/%m/%d")
     week_str = week_info["title_week"]
+
+    # 銘柄名と業種名を日本語に統一・補正
+    for o in opportunities:
+        t_code = str(o.get("ticker", "")).strip().upper().replace(".T", "")
+        if get_stock_info:
+            meta = get_stock_info(t_code)
+            if meta:
+                if meta.get("name"):
+                    o["name"] = meta["name"]
+                if meta.get("sector"):
+                    o["sector"] = meta["sector"]
+        # sectorが英語の場合は日本語に翻訳
+        cur_sec = o.get("sector", "")
+        if cur_sec in SECTOR_JA_MAP:
+            o["sector"] = SECTOR_JA_MAP[cur_sec]
 
     # 決算日順、かつスコア順にソート
     sorted_opps = sorted(
@@ -227,9 +261,9 @@ def run_weekly_note_generation(target_days_min: int = 2, target_days_max: int = 
     init_db()
     week_info = get_upcoming_week_dates()
 
-    # 1. 銘柄スキャン＆スクリーニング (force_refresh=True)
+    # 1. 銘柄スキャン＆スクリーニング (force_refresh=True, 候補プールを広めに取得)
     print("🔍 東証全銘柄から来週決算の注目企業をスクリーニング中...")
-    all_opps = auto_screen_upcoming_opportunities(force_refresh=True)
+    all_opps = auto_screen_upcoming_opportunities(max_results=60, force_refresh=True)
 
     # 2. 決算1週間前（target_days_min <= days <= target_days_max）にフィルタリング
     target_opps = [
@@ -237,10 +271,13 @@ def run_weekly_note_generation(target_days_min: int = 2, target_days_max: int = 
         if target_days_min <= o.get("days_until_earnings", 999) <= target_days_max
     ]
 
-    # もし1週間前ピンポイントで0件の場合は、直近上位銘柄（0〜14日後）をフォールバックとして採用
-    if not target_opps and all_opps:
+    # もし1週間前ピンポイントで少ない場合は、直近上位銘柄（0〜14日後）をフォールバックとして採用
+    if len(target_opps) < 3 and all_opps:
         print(f"  ※対象日数範囲({target_days_min}〜{target_days_max}日)の該当が少ないため、直近の上位注目銘柄を採用します。")
         target_opps = all_opps[:8]
+    else:
+        # note記事として読みやすい厳選8〜10銘柄に調整
+        target_opps = target_opps[:10]
 
     print(f"✅ 抽出完了: {len(target_opps)} 銘柄をnote記事にまとめます。")
 

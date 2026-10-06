@@ -1,13 +1,15 @@
 @echo off
-chcp 65001 > nul
-title æ±ºç®—ãƒˆãƒ¬ãƒ¼ãƒ‰äºˆæ¸¬ãƒ»æ¤œè¨¼ã‚·ã‚¹ãƒ†ãƒ 
+setlocal
+title ŒˆŽZƒgƒŒ[ƒhEƒTƒCƒNƒ‹—\‘ªŒŸØƒVƒXƒeƒ€ ƒ_ƒbƒVƒ…ƒ{[ƒh‹N“®
 
 echo ==========================================================
-echo   æ±ºç®—ãƒ—ãƒ¬ãƒˆãƒ¬ãƒ¼ãƒ‰äºˆæ¸¬ãƒ»æ¤œè¨¼ãƒ€ãƒƒã‚·ãƒ¥ãƒœãƒ¼ãƒ‰ã‚’èµ·å‹•ä¸­...
-echo   ãƒ–ãƒ©ã‚¦ã‚¶ãŒè‡ªå‹•çš„ã«é–‹ãã¾ã™ (http://localhost:8080)
+echo   ŒˆŽZƒgƒŒ[ƒhEƒTƒCƒNƒ‹—\‘ªŒŸØƒVƒXƒeƒ€ ƒ_ƒbƒVƒ…ƒ{[ƒh‹N“®
 echo ==========================================================
+echo.
 
-:: Pythonã®å®Ÿè¡Œãƒ‘ã‚¹ã‚’è‡ªå‹•æ¤œå‡º
+cd /d "%~dp0"
+
+:: PythonŽÀsƒpƒX‚ÌŽ©“®ŒŸo
 if exist "%LOCALAPPDATA%\Programs\Python\Python310\python.exe" (
     "%LOCALAPPDATA%\Programs\Python\Python310\python.exe" main.py
     goto end
@@ -21,24 +23,25 @@ if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
     goto end
 )
 
-:: py ãƒ©ãƒ³ãƒãƒ£ãƒ¼ã‚’è©¦è¡Œ
-py -3 --version >nul 2>&1
+where py >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     py -3 main.py
     goto end
 )
 
-:: ã‚·ã‚¹ãƒ†ãƒ PATHã® python ã‚’è©¦è¡Œ
-python --version >nul 2>&1
+where python >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     python main.py
     goto end
 )
 
-echo [ã‚¨ãƒ©ãƒ¼] æœ‰åŠ¹ãª Python å®Ÿè¡Œç’°å¢ƒãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“ã§ã—ãŸã€‚
-echo Python 3.9ä»¥ä¸Šã‚’ã‚¤ãƒ³ã‚¹ãƒˆãƒ¼ãƒ«ã—ã¦å®Ÿè¡Œã—ã¦ãã ã•ã„ã€‚
-echo https://www.python.org/downloads/
+echo [ƒGƒ‰[] —LŒø‚È Python ŽÀsŠÂ‹«‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ‚Å‚µ‚½B
+pause
+exit /b 1
 
 :end
+echo.
+echo ==========================================================
+echo   ˆ—‚ªŠ®—¹‚µ‚Ü‚µ‚½B
+echo ==========================================================
 pause
-

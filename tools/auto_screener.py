@@ -502,6 +502,7 @@ def auto_screen_upcoming_opportunities(
     print(f"[screener] Phase 1 完了: {len(earnings_hits)}銘柄が決算当日から14日後")
     print(f"[screener] Phase 2: {len(earnings_hits)}銘柄の3大戦略詳細分析開始...")
     opportunities = []
+    all_evaluated = []
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         future_to_hit = {
@@ -517,19 +518,30 @@ def auto_screen_upcoming_opportunities(
             completed += 1
             try:
                 res = future.result()
-                if res and res["score"] >= 50.0:
-                    if not strategy_filter or res["strategy"] == strategy_filter.upper():
-                        opportunities.append(res)
+                if res:
+                    all_evaluated.append(res)
+                    if res["score"] >= 50.0:
+                        if not strategy_filter or res["strategy"] == strategy_filter.upper():
+                            opportunities.append(res)
             except Exception:
                 continue
 
             if completed % 20 == 0:
                 print(f"  [{completed}/{len(earnings_hits)}] 分析済み... 候補: {len(opportunities)}件")
 
+    # もしスコア50以上が0件の場合は、全評価済み銘柄から上位をフォールバックとして採用
+    if not opportunities and all_evaluated:
+        print("[screener] スコア50点以上が0件のため、評価スコア上位の銘柄を採用します。")
+        all_evaluated.sort(key=lambda x: (-x["score"], x["days_until_earnings"]))
+        opportunities = [
+            x for x in all_evaluated
+            if not strategy_filter or x["strategy"] == strategy_filter.upper()
+        ]
+
     # スコア順にソート
     opportunities.sort(key=lambda x: (-x["score"], x["days_until_earnings"], -x["expected_return_pct"]))
 
-    print(f"[screener] Phase 2 完了: {len(opportunities)}銘柄がスコア50点以上（上位{max_results}件を返却）")
+    print(f"[screener] Phase 2 完了: {len(opportunities)}銘柄を抽出（上位{max_results}件を返却）")
     return opportunities[:max_results]
 
 

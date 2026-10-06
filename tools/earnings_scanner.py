@@ -37,11 +37,13 @@ EARNINGS_CACHE_TTL = 43200
 JPX_SCHEDULE_PAGE_URL = "https://www.jpx.co.jp/listing/event-schedules/financial-announcement/index.html"
 
 
-def _fetch_jpx_earnings_schedule_excel() -> Optional[str]:
+def _fetch_all_jpx_earnings_excels() -> List[str]:
     """
-    JPX公式サイトから最新の決算発表予定会社一覧Excelをスクレイピングしてダウンロード
+    JPX公式サイトから掲載されている全ての決算発表予定会社一覧Excelをスクレイピングしてダウンロード
+    （8月期、9月期、四半期など複数月期の予定表を網羅）
     """
     os.makedirs(DATA_DIR, exist_ok=True)
+    downloaded_files = []
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -53,24 +55,35 @@ def _fetch_jpx_earnings_schedule_excel() -> Optional[str]:
         links = re.findall(r'href=["\']([^"\']+\.xls[x]?)["\']', html)
         if not links:
             print("[earnings_scanner] JPXスケジュールページにExcelリンクが見つかりません。")
-            return None
+            return []
 
-        # 最新のファイル（通常リンク末尾または直近日付のもの）
-        target_link = links[-1]
-        full_url = urllib.parse.urljoin(JPX_SCHEDULE_PAGE_URL, target_link)
+        # 重複リンク排除しつつ順序維持
+        seen = set()
+        unique_links = []
+        for l in links:
+            if l not in seen:
+                seen.add(l)
+                unique_links.append(l)
 
-        print(f"[earnings_scanner] JPX決算発表予定Excelをダウンロード: {full_url}")
-        req_dl = urllib.request.Request(full_url, headers=headers)
-        with urllib.request.urlopen(req_dl, timeout=20) as resp_dl:
-            data = resp_dl.read()
-            with open(JPX_KESSAN_EXCEL_LOCAL, "wb") as f:
-                f.write(data)
+        for idx, target_link in enumerate(unique_links):
+            full_url = urllib.parse.urljoin(JPX_SCHEDULE_PAGE_URL, target_link)
+            fname = os.path.basename(target_link.split("?")[0])
+            local_path = os.path.join(DATA_DIR, f"jpx_{idx}_{fname}")
+            try:
+                req_dl = urllib.request.Request(full_url, headers=headers)
+                with urllib.request.urlopen(req_dl, timeout=20) as resp_dl:
+                    data = resp_dl.read()
+                    with open(local_path, "wb") as f:
+                        f.write(data)
+                downloaded_files.append(local_path)
+            except Exception as e:
+                print(f"[earnings_scanner] ダウンロード失敗 ({full_url}): {e}")
 
-        print(f"[earnings_scanner] JPX決算発表予定Excel保存完了 ({len(data)} bytes)")
-        return JPX_KESSAN_EXCEL_LOCAL
+        print(f"[earnings_scanner] JPX決算発表予定Excelを計 {len(downloaded_files)} 件ダウンロード完了")
+        return downloaded_files
     except Exception as e:
         print(f"[earnings_scanner] JPX決算発表予定Excelダウンロード失敗: {e}")
-        return None
+        return []
 
 
 def _parse_jpx_earnings_schedule(
@@ -287,35 +300,50 @@ def scan_earnings_dates_bulk(
 
     start_time = time.time()
 
-    # 2. 第1優先: JPX公式決算発表スケジュールExcelから抽出
-    jpx_excel = None
-    if os.path.exists(JPX_KESSAN_EXCEL_LOCAL):
-        # 12時間以内のファイルなら再利用
-        mod_time = datetime.fromtimestamp(os.path.getmtime(JPX_KESSAN_EXCEL_LOCAL))
-        if datetime.now() - mod_time < timedelta(hours=12):
-            jpx_excel = JPX_KESSAN_EXCEL_LOCAL
-        else:
-            jpx_excel = _fetch_jpx_earnings_schedule_excel() or JPX_KESSAN_EXCEL_LOCAL
-    else:
-        jpx_excel = _fetch_jpx_earnings_schedule_excel()
+    # 2. 第1優先: JPX公式決算発表スケジュールExcel（全月期）から抽出
+    jpx_excels = []
+    # 既存のjpx_*.xlsxがあるかチェック
+    existing_jpx_files = [
+        os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR)
+        if f.startswith("jpx_") and (f.endswith(".xlsx") or f.endswith(".xls"))
+    ]
+    if existing_jpx_files and not force_refresh:
+        # 最新ファイルの更新日時をチェック
+        latest_mtime = max(os.path.getmtime(f) for f in existing_jpx_files)
+        if datetime.now() - datetime.fromtimestamp(latest_mtime) < timedelta(hours=12):
+            jpx_excels = existing_jpx_files
 
-    if jpx_excel and os.path.exists(jpx_excel):
-        print(f"[earnings_scanner] JPX公式決算発表スケジュールから抽出中 ({days_min}〜{days_max}日後)...")
-        jpx_results = _parse_jpx_earnings_schedule(jpx_excel, days_min=days_min, days_max=days_max)
+    if not jpx_excels:
+        jpx_excels = _fetch_all_jpx_earnings_excels()
+        if not jpx_excels and existing_jpx_files:
+            jpx_excels = existing_jpx_files
+
+    if jpx_excels:
+        print(f"[earnings_scanner] JPX公式決算発表スケジュール ({len(jpx_excels)}ファイル) から抽出中 ({days_min}〜{days_max}日後)...")
+        combined_hits: Dict[str, Dict[str, Any]] = {}
+        for excel_file in jpx_excels:
+            hits = _parse_jpx_earnings_schedule(excel_file, days_min=days_min, days_max=days_max)
+            for h in hits:
+                code = h["code"]
+                # 重複時はより早い直近の決算日を優先
+                if code not in combined_hits or h["days_until"] < combined_hits[code]["days_until"]:
+                    combined_hits[code] = h
+
+        jpx_results = list(combined_hits.values())
         if jpx_results:
             elapsed_sec = round(time.time() - start_time, 2)
             # 決算日が近い順にソート
             jpx_results.sort(key=lambda x: (x["days_until"], x["code"]))
-            
+
             if max_tickers:
                 jpx_results = jpx_results[:max_tickers]
 
             scan_stats = {
-                "total_scanned": "JPX東証全銘柄 (公式発表一覧)",
+                "total_scanned": f"JPX東証全銘柄 (公式発表一覧 {len(jpx_excels)}ファイル網羅)",
                 "matched": len(jpx_results),
                 "elapsed_sec": elapsed_sec,
                 "scan_date": date.today().isoformat(),
-                "method": "JPX_OFFICIAL_EXCEL",
+                "method": "JPX_OFFICIAL_EXCEL_ALL",
                 "from_cache": False
             }
             print(f"[earnings_scanner] JPX公式スケジュール抽出完了: {len(jpx_results)}銘柄が決算{days_min}〜{days_max}日後 ({elapsed_sec}秒)")

@@ -14,6 +14,14 @@ from typing import Dict, Any, Optional, List, Tuple
 import pandas as pd
 import yfinance as yf
 
+try:
+    from tools.universe import get_stock_info
+except ImportError:
+    try:
+        from universe import get_stock_info
+    except ImportError:
+        get_stock_info = None
+
 
 def normalize_ticker(ticker: str) -> str:
     """銘柄コードを日本株シンボル (XXXX.T) に正規化"""
@@ -31,6 +39,7 @@ def fetch_stock_live_data(ticker_input: str) -> Dict[str, Any]:
     銘柄コードから市場の実データを自動取得し、テクニカル分析・波動計算・目標値を自動生成
     """
     symbol = normalize_ticker(ticker_input)
+    ticker_code = ticker_input.strip().upper().replace(".T", "")
     t = yf.Ticker(symbol)
 
     # 1. 銘柄基本情報
@@ -40,10 +49,17 @@ def fetch_stock_live_data(ticker_input: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 会社名
-    name = info.get("longName") or info.get("shortName") or ticker_input
-    # 英語表記の場合のクリーンアップ
-    sector = info.get("sector") or info.get("industry") or "一般"
+    # 日本語会社名・業種名を優先取得
+    stock_meta = get_stock_info(ticker_code) if get_stock_info else None
+    if stock_meta and stock_meta.get("name"):
+        name = stock_meta["name"]
+    else:
+        name = info.get("longName") or info.get("shortName") or ticker_input
+
+    if stock_meta and stock_meta.get("sector"):
+        sector = stock_meta["sector"]
+    else:
+        sector = info.get("sector") or info.get("industry") or "一般"
 
     # 2. 直近株価と日足データ (過去6ヶ月)
     hist = t.history(period="6mo")
