@@ -11,6 +11,7 @@ note投稿用Markdown記事を出力します。
 
 import os
 import sys
+import math
 import subprocess
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
@@ -68,11 +69,107 @@ def get_upcoming_week_dates() -> Dict[str, Any]:
     }
 
 
-def format_currency(val: float) -> str:
-    if val is None or val == 0:
+def format_currency(val: Any) -> str:
+    if val is None:
         return "---"
-    return f"{int(round(val)):,} 円"
+    try:
+        val_f = float(val)
+        if math.isnan(val_f) or val_f <= 0:
+            return "---"
+        return f"{int(round(val_f)):,} 円"
+    except (ValueError, TypeError):
+        return "---"
 
+
+PORTFOLIO_CAPITAL = 1_000_000
+RISK_PER_TRADE_PCT = 2.0
+MAX_TOTAL_RISK_PCT = 6.0  # 同時保有ポジションの合計リスク上限（元本比）
+
+
+def _safe_num(val: Any) -> float:
+    try:
+        f = float(val)
+        return 0.0 if math.isnan(f) else f
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def compute_position_plan(o: Dict[str, Any], capital: float = PORTFOLIO_CAPITAL,
+                          risk_pct: float = RISK_PER_TRADE_PCT) -> Dict[str, Any]:
+    """1銘柄の推奨株数・買付代金・最大損失額を算出（2%損失ルール、単元超過時はミニ株）"""
+    from tools.position_sizer import calculate_position
+
+    c_p = _safe_num(o.get("current_price"))
+    s_p = _safe_num(o.get("stop_loss"))
+    t_p = _safe_num(o.get("target_price"))
+    entry = c_p if c_p > 0 else 1000
+    pos = calculate_position(
+        total_capital=capital,
+        risk_per_trade_pct=risk_pct,
+        entry_price=entry,
+        stop_loss_price=s_p if s_p > 0 else entry * 0.95,
+        target_price=t_p if t_p > 0 else entry * 1.1,
+        unit_shares=100,
+    )
+    if pos.risk_exceeded:
+        shares = pos.odd_lot_shares
+        return {
+            "shares": shares,
+            "cost": int(round(entry * shares)),
+            "risk": int(round(pos.odd_lot_risk)),
+            "odd_lot": True,
+            "unit_risk": int(round(pos.actual_risk)),
+        }
+    return {
+        "shares": pos.shares,
+        "cost": int(round(pos.position_size)),
+        "risk": int(round(pos.actual_risk)),
+        "odd_lot": False,
+        "unit_risk": int(round(pos.actual_risk)),
+    }
+
+
+def summarize_portfolio(opps: List[Dict[str, Any]], plans: List[Dict[str, Any]],
+                        capital: float = PORTFOLIO_CAPITAL,
+                        max_total_risk_pct: float = MAX_TOTAL_RISK_PCT) -> Dict[str, Any]:
+    """
+    推奨銘柄を全て同時保有した場合の合計代金・合計リスクを検査し、
+    スコア上位から「元本以内 かつ 合計リスク上限以内」に収まる同時保有枠を選定する。
+    """
+    max_total_risk = capital * max_total_risk_pct / 100
+    total_cost = sum(p["cost"] for p in plans)
+    total_risk = sum(p["risk"] for p in plans)
+
+    ranked = sorted(zip(opps, plans), key=lambda x: -_safe_num(x[0].get("score")))
+    selected: List[str] = []
+    sel_cost = 0
+    sel_risk = 0
+    for o, p in ranked:
+        # 戦略A（決算前モメンタム）で減益警戒（★1）の銘柄は、先回り買いの根拠が薄いため推奨枠から除外
+        strat_id = o.get("strategy") or ""
+        strat_name = str(o.get("strategy_name", ""))
+        is_strat_a = (strat_id == "A") or ("戦略A" in strat_name)
+        rev_stars = o.get("revision_stars", 3)
+        rev_prob = str(o.get("revision_probability", ""))
+        if is_strat_a and (rev_stars <= 1 or "★ 警戒" in rev_prob):
+            continue
+
+        if sel_cost + p["cost"] <= capital and sel_risk + p["risk"] <= max_total_risk:
+            selected.append(str(o.get("ticker")))
+            sel_cost += p["cost"]
+            sel_risk += p["risk"]
+
+    return {
+        "capital": capital,
+        "max_total_risk": max_total_risk,
+        "total_cost": total_cost,
+        "total_risk": total_risk,
+        "over_capital": total_cost > capital,
+        "over_risk": total_risk > max_total_risk,
+        "selected": selected,
+        "selected_cost": sel_cost,
+        "selected_risk": sel_risk,
+    }
 
 def generate_note_markdown(opportunities: List[Dict[str, Any]], week_info: Dict[str, Any]) -> str:
     """note記事用の洗練されたMarkdownテキストを生成"""
@@ -104,7 +201,10 @@ def generate_note_markdown(opportunities: List[Dict[str, Any]], week_info: Dict[
     # 記事タイトル
     lines.append(f"【週刊・決算トレード分析】来週（{week_str}）決算発表！注目の決算プレトレード候補銘柄＆テクニカル戦略まとめ")
     lines.append("")
-    lines.append(f"執筆日: {today_str}（東証全銘柄データ解析）")
+    # データ基準日を特定
+    data_dates = [o.get("price_date") for o in sorted_opps if o.get("price_date")]
+    price_date_label = f"（最新株価データ基準: {data_dates[0]} 終値）" if data_dates else "（東証全銘柄データ解析）"
+    lines.append(f"執筆日: {today_str} {price_date_label}")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -113,7 +213,7 @@ def generate_note_markdown(opportunities: List[Dict[str, Any]], week_info: Dict[
     lines.append("決算発表前後の株価は、思惑や好業績サプライズ、テクニカルな節目が重なり、大きな値動き（ボラティリティ）が発生します。")
     lines.append("本記事では、東証全上場銘柄の中から **「来週（決算約1週間前）に決算を控える銘柄」** を独自スクリーニング。")
     lines.append("")
-    lines.append("以下の3大プロ戦略に基づき、**業績進捗率・テクニカルチャート形状・リスクリワード（1:2以上）・資金管理**の基準をクリアした注目銘柄を厳選分析してお届けします。")
+    lines.append("以下の3大プロ戦略に基づき、**業績進捗率・テクニカルチャート形状・リスクリワード（推奨1:1.5以上）・資金管理**の基準をクリアした注目銘柄を厳選分析してお届けします。")
     lines.append("")
     lines.append("- ⚡ **戦略A（決算前モメンタム型）**: 決算発表の4〜10日前に仕込み、発表直前に利確して手仕舞う（持ち越しリスクなし）。")
     lines.append("- 🎯 **戦略B（決算またぎ上方修正型）**: 高進捗・上方修正期待銘柄に絞り、決算サプライズ大陽線を狙う。")
@@ -133,8 +233,10 @@ def generate_note_markdown(opportunities: List[Dict[str, Any]], week_info: Dict[
         lines.append("| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |")
         for o in sorted_opps:
             ret_str = f"+{o.get('expected_return_pct', 0)}%"
+            b_days = o.get("business_days_until")
+            b_str = f" / 東証{b_days}営業日後" if b_days is not None else ""
             lines.append(
-                f"| **{o['ticker']}** | {o['name']} | {o.get('earnings_date', '--')} ({o.get('days_until_earnings', '?')}日後) | "
+                f"| **{o['ticker']}** | {o['name']} | {o.get('earnings_date', '--')} ({o.get('days_until_earnings', '?')}日後{b_str}) | "
                 f"{format_currency(o['current_price'])} | {o.get('strategy_name', '戦略')} | "
                 f"{ret_str} | 1:{o.get('risk_reward_ratio', 2.0)} | **{o.get('score', 0)}pt** |"
             )
@@ -142,7 +244,35 @@ def generate_note_markdown(opportunities: List[Dict[str, Any]], week_info: Dict[
         lines.append("---")
         lines.append("")
 
-        # 各銘柄の詳細分析
+        # ポートフォリオ全体の資金枠チェック
+        plans = [compute_position_plan(o) for o in sorted_opps]
+        pf = summarize_portfolio(sorted_opps, plans)
+        plan_by_ticker = {str(o["ticker"]): p for o, p in zip(sorted_opps, plans)}
+        selected_set = set(pf["selected"])
+
+        lines.append("## 🧮 ポートフォリオ全体の資金枠チェック（元本100万円）")
+        lines.append("")
+        lines.append("1銘柄ごとの「2%損失ルール」に加え、**同時に保有する全ポジションの合計**も管理します。")
+        lines.append("")
+        lines.append(f"- **全{len(sorted_opps)}銘柄を推奨株数で同時保有した場合**: 買付代金 {pf['total_cost']:,} 円 / 最大損失合計 {pf['total_risk']:,} 円（元本比 {pf['total_risk'] / pf['capital'] * 100:.1f}%）")
+        if pf["over_capital"] or pf["over_risk"]:
+            reasons_over = []
+            if pf["over_capital"]:
+                reasons_over.append(f"買付代金が元本を {pf['total_cost'] - pf['capital']:,} 円超過")
+            if pf["over_risk"]:
+                reasons_over.append(f"合計リスクが上限 {int(pf['max_total_risk']):,} 円（{MAX_TOTAL_RISK_PCT:.0f}%）を超過")
+            lines.append(f"- **⚠️ 全銘柄の同時保有は不可**: {' / '.join(reasons_over)}")
+        lines.append(f"- **同時保有の推奨枠（スコア上位から元本・リスク上限内で選定）**: {len(pf['selected'])} 銘柄 → " +
+                     ("、".join(f"[{t}]" for t in pf["selected"]) if pf["selected"] else "該当なし"))
+        lines.append(f"  - 買付代金 {pf['selected_cost']:,} 円 / 最大損失合計 {pf['selected_risk']:,} 円（元本比 {pf['selected_risk'] / pf['capital'] * 100:.1f}%）")
+        lines.append("- 枠外の銘柄は、枠内銘柄の手仕舞い後に入れ替える「控え候補」として扱ってください（※減益警戒銘柄はリスク回避のため枠外固定）。")
+        lines.append("")
+        lines.append("> 📌 **単元未満株（ミニ株）の実務運用ルール（約定仕様の注意）**:")
+        lines.append("> 主要ネット証券（SBI・楽天・マネックス等）の単元未満株取引では、ザラ場のリアルタイム指値・逆指値注文が利用できず、**「前場寄付き・後場寄付き・大引け」の成行約定**となります。")
+        lines.append("> そのため、ロスカット（損切り）はザラ場の逆指値ではなく**「前日終値で損切りラインを明確に割り込んだ場合、翌営業日の朝の寄付き成行で決済する」**ルールでの規律ある運用を推奨します。")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
         lines.append("## 🔍 各銘柄の徹底テクニカル＆資金管理分析")
         lines.append("")
 
@@ -161,13 +291,15 @@ def generate_note_markdown(opportunities: List[Dict[str, Any]], week_info: Dict[
             pattern = o.get("technical_pattern", "ブレイクアウト")
             edate = o.get("earnings_date", "--")
             days = o.get("days_until_earnings", 0)
+            b_days = o.get("business_days_until")
+            b_str = f" / 東証 **{b_days} 営業日後**" if b_days is not None else ""
             trade_action = o.get("trade_action", "")
             reasons = o.get("reasons", [])
 
             lines.append(f"### {idx}. 【{strat}】[{t}] {name}（{sector}）")
             lines.append("")
             lines.append(f"- **総合スコア**: **{score} 点** / 判定ランク: **{rank}**")
-            lines.append(f"- **決算発表予定日**: **{edate}**（あと **{days} 日**）")
+            lines.append(f"- **決算発表予定日**: **{edate}**（あと **{days} 日**{b_str}）")
             lines.append(f"- **現在株価**: {format_currency(cur_price)}")
             lines.append(f"- **推奨売買アクション**: **{trade_action}**")
             lines.append("")
@@ -175,10 +307,10 @@ def generate_note_markdown(opportunities: List[Dict[str, Any]], week_info: Dict[
             # 業績進捗・上方修正確率
             rev_prob = o.get("revision_probability", "中")
             prog_rate = o.get("progress_rate", 0)
-            lines.append("#### 📈 業績進捗 ＆ 上方修正確率")
+            lines.append("#### 📈 業績進捗 ＆ 上方修正期待度")
             if prog_rate > 0:
                 lines.append(f"- **経常利益進捗率**: **{prog_rate}%**")
-            lines.append(f"- **上方修正確度判定**: **{rev_prob}**")
+            lines.append(f"- **業績モメンタム判定**: **{rev_prob}**")
             lines.append("")
 
             # テクニカル分析
@@ -202,25 +334,33 @@ def generate_note_markdown(opportunities: List[Dict[str, Any]], week_info: Dict[
                 lines.append(f"  - {r}")
             lines.append("")
 
-            # 資金管理・ポジションサイジング（100万円元本）
-            ps = o.get("position_sizing", {})
+            # 資金管理・ポジションサイジング（100万円元本、2%損失ルール）
             lines.append("#### 🛡 100万円元本ベース 資金管理設計（2%損失ルール）")
             lines.append(f"- **目標利確株価**: **{format_currency(target)}**（想定リターン: **+{exp_ret}%**）")
-            lines.append(f"- **損切りライン**: **{format_currency(stop)}**（許容損失率: -{abs(round((cur_price - stop) / cur_price * 100, 1))}%）")
-            lines.append(f"- **リスクリワード比**: **1 : {rr}**（※プロ基準 1:2.0以上）")
+            loss_pct_str = "---"
+            if cur_price and stop and cur_price > 0:
+                try:
+                    loss_pct_str = f"-{abs(round((cur_price - stop) / cur_price * 100, 1))}%"
+                except Exception:
+                    pass
+            lines.append(f"- **損切りライン**: **{format_currency(stop)}**（許容損失率: {loss_pct_str}）")
+            lines.append(f"- **リスクリワード比**: **1 : {rr}**（※プロ基準 1:1.5以上推奨）")
 
-            if ps:
-                shares = ps.get("recommended_shares", 100)
-                inv_amt = ps.get("total_investment", cur_price * shares)
-                max_loss = ps.get("total_risk_amount", abs(cur_price - stop) * shares)
-                lines.append(f"- **推奨買付株数**: **{shares:,} 株**（約 {int(inv_amt):,} 円 / ポートフォリオ比率: {ps.get('capital_weight_pct', 0)}%）")
-                lines.append(f"- **最大許容リスク額**: {int(max_loss):,} 円（元本100万円の2.0%以内）")
+            c_p = _safe_num(cur_price)
+            plan = plan_by_ticker[str(t)]
+
+            if plan["odd_lot"]:
+                # 100株単元で2万円上限を超えてしまう場合
+                lines.append(f"- **推奨買付株数**: **{plan['shares']:,} 株**（単元未満株・ミニ株推奨 / 約 {plan['cost']:,} 円）")
+                lines.append(f"- **最大許容リスク額**: **{plan['risk']:,} 円**（元本100万円の2.0%以内を厳守）")
+                lines.append(f"- **⚠️ 注意**: 単元株（100株）購入時はリスク約{plan['unit_risk']:,}円となり2万円上限を超過するため、ミニ株利用または見送りを推奨（※ミニ株は成行約定となるため終値判定推奨）")
             else:
-                # 簡易算出
-                risk_per_share = max(1.0, cur_price - stop)
-                shares = max(100, int((20000 / risk_per_share) // 100) * 100)
-                lines.append(f"- **推奨買付株数**: **{shares:,} 株**（約 {int(cur_price * shares):,} 円）")
-                lines.append(f"- **最大許容リスク額**: {int(risk_per_share * shares):,} 円（最大許容損失2万円以内）")
+                lines.append(f"- **推奨買付株数**: **{plan['shares']:,} 株**（約 {plan['cost']:,} 円 / ポートフォリオ比率: {round(plan['cost'] / 10000, 1)}%）")
+                lines.append(f"- **最大許容リスク額**: **{plan['risk']:,} 円**（元本100万円の2.0%以内）")
+            if str(t) in selected_set:
+                lines.append("- **同時保有枠**: ✅ 枠内（スコア上位・資金枠内）")
+            else:
+                lines.append("- **同時保有枠**: ⏸ 控え候補（資金枠外。枠内銘柄の手仕舞い後に検討）")
 
             lines.append("")
             lines.append("---")

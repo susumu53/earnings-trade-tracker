@@ -27,13 +27,15 @@ try:
     from tools.market_data import fetch_stock_live_data, normalize_ticker
     from tools.predictor import query_historical_pattern_stats
     from tools.earnings_scanner import scan_earnings_dates_bulk
+    from tools.calendar_util import is_tse_trading_day, get_tse_business_days_between
 except ImportError:
     from market_data import fetch_stock_live_data, normalize_ticker
     from predictor import query_historical_pattern_stats
     from earnings_scanner import scan_earnings_dates_bulk
+    from calendar_util import is_tse_trading_day, get_tse_business_days_between
 
 
-def evaluate_strategy_a(data: Dict[str, Any], days_until: int) -> Dict[str, Any]:
+def evaluate_strategy_a(data: Dict[str, Any], days_until: int, business_days_until: Optional[int] = None) -> Dict[str, Any]:
     """
     戦略A: 決算前モメンタム型（持ち越さない・先回り）の適性スコアリング（100点満点）
     - 狙い: 決算発表の7〜14日前に仕込み、前日引けまでに利確して手仕舞う
@@ -47,21 +49,23 @@ def evaluate_strategy_a(data: Dict[str, Any], days_until: int) -> Dict[str, Any]
     bias25 = data["ma25_bias_pct"]
     volume_ratio = data.get("volume_ratio", 1.0)
     market_cap = data.get("market_cap", 0)
-    cap_billion = market_cap / 1_000_000_000
+    cap_oku = market_cap / 100_000_000
+
+    if business_days_until is None:
+        business_days_until = max(0, int(round(days_until * 5 / 7)))
 
     score = 0.0
     breakdown = {}
 
-    # ① タイミング評価 (最大25点) - 7〜14日前が最良
-    if 7 <= days_until <= 14:
+    # ① タイミング評価 (最大25点) - 東証の実稼働営業日ベースで判定
+    # 決算前日引けまでに手仕舞うため、仕込み可能な実営業日 = business_days_until - 1日
+    if business_days_until >= 5:
         timing_score = 25.0
-    elif 5 <= days_until <= 6:
+    elif business_days_until in (3, 4):
         timing_score = 18.0
-    elif 3 <= days_until <= 4:
-        timing_score = 12.0
-    elif 1 <= days_until <= 2:
-        timing_score = 5.0  # 手仕舞い期に近いため低評価
-    elif days_until == 0:
+    elif business_days_until == 2:
+        timing_score = 5.0  # 前日1日しか売買できず先回り期間不足
+    elif business_days_until <= 1:
         timing_score = 0.0  # 当日は戦略Aの仕込み対象外
     else:
         timing_score = 8.0
@@ -125,15 +129,56 @@ def evaluate_strategy_a(data: Dict[str, Any], days_until: int) -> Dict[str, Any]
     score += rr_score
     breakdown["risk_reward"] = rr_score
 
+    # ⑥ 業績フィルター（ペナルティのみ）
+    # 減益企業は決算前の先回り買いが入りにくく、決算前に失望売りが出やすいため減点する
+    rev_stars = data.get("revision_stars", 3)
+    if rev_stars <= 1:
+        fundamental_score = -15.0
+    elif rev_stars == 2:
+        fundamental_score = -5.0
+    else:
+        fundamental_score = 0.0
+    score += fundamental_score
+    breakdown["fundamentals"] = fundamental_score
+
     score = max(10.0, min(98.0, round(score, 1)))
 
+    # 根拠ラベル（表示値＝小数1桁丸めで判定し、表示と文言の矛盾を防ぐ）
+    bias_disp = round(bias25, 1)
+    vol_disp = round(volume_ratio, 1)
+    if bias_disp > 12.0:
+        bias_label = "先食い過熱・急反落リスク"
+    elif bias_disp > 8.0:
+        bias_label = "上昇ピッチやや速い"
+    elif bias_disp > 4.0:
+        bias_label = "上昇トレンド継続"
+    elif bias_disp >= 0.0:
+        bias_label = "過熱前の健全水準"
+    elif bias_disp >= -3.0:
+        bias_label = "25日線付近の押し目"
+    else:
+        bias_label = "25日線割れ・下降警戒"
+
+    if vol_disp > 2.2:
+        vol_label = "出来高急増・過熱気味"
+    elif vol_disp >= 1.3:
+        vol_label = "先回り買い検出"
+    elif vol_disp >= 1.0:
+        vol_label = "平常水準"
+    else:
+        vol_label = "閑散・資金流入なし"
+
     reasons = [
-        f"決算{days_until}日前（先回り仕込み好機）",
-        f"25MA乖離率 {bias25:+.1f}%（過熱前の健全水準）",
-        f"出来高比率 {volume_ratio:.1f}倍（先回り買い検出）"
+        f"決算{days_until}日後（東証{business_days_until}営業日後・先回り期間）",
+        f"25MA乖離率 {bias25:+.1f}%（{bias_label}）",
+        f"出来高比率 {volume_ratio:.1f}倍（{vol_label}）"
     ]
+    if business_days_until <= 2:
+        reasons.append(f"⚠️ 先回り可能な東証営業日が残り{max(0, business_days_until - 1)}日と短いため注意")
     if pattern in ["25日線押し目反発型", "カップウィズハンドル型"]:
         reasons.append(f"反発支持形状（{pattern}）")
+    if rev_stars <= 2:
+        reasons.append(f"⚠️ 業績判定 {data.get('revision_probability', '')}（減点対象）")
 
     return {
         "score": score,
@@ -160,7 +205,7 @@ def evaluate_strategy_b(data: Dict[str, Any], days_until: int) -> Dict[str, Any]
     bias25 = data["ma25_bias_pct"]
     volume_ratio = data.get("volume_ratio", 1.0)
     market_cap = data.get("market_cap", 0)
-    cap_billion = market_cap / 1_000_000_000
+    cap_oku = market_cap / 100_000_000
 
     score = 0.0
     breakdown = {}
@@ -192,16 +237,16 @@ def evaluate_strategy_b(data: Dict[str, Any], days_until: int) -> Dict[str, Any]
     score += tech_score
     breakdown["technical"] = tech_score
 
-    # ③ 爆発力・時価総額フィルター (最大20点) - 100億〜1500億円の中小型株がストップ高しやすい
-    if 100 <= cap_billion <= 800:
+    # ③ 爆発力・時価総額フィルター (最大20点) - 100億〜800億円の中小型株がストップ高しやすい
+    if 100 <= cap_oku <= 800:
         cap_score = 20.0   # S高本命ゾーン（中小型・値動き軽い）
-    elif 800 < cap_billion <= 2000:
+    elif 800 < cap_oku <= 2000:
         cap_score = 14.0   # 中型株
-    elif 30 <= cap_billion < 100:
+    elif 30 <= cap_oku < 100:
         cap_score = 12.0   # 小型株
-    elif 2000 < cap_billion <= 5000:
+    elif 2000 < cap_oku <= 5000:
         cap_score = 6.0    # 大型株（S高しにくい）
-    elif cap_billion > 5000:
+    elif cap_oku > 5000:
         cap_score = 0.0    # 超大型株
     else:
         cap_score = 5.0    # 不明/超小型
@@ -233,14 +278,14 @@ def evaluate_strategy_b(data: Dict[str, Any], days_until: int) -> Dict[str, Any]
     score += rr_score
     breakdown["risk_reward"] = rr_score
 
-    # ⑥ 業績成長率 & 上方修正確率（progress_calculator連動）
+    # ⑥ 業績成長率 & 上方修正期待度（progress_calculator連動）
     rev_stars = data.get("revision_stars", 3)
     e_growth = data.get("earnings_growth")
     fundamental_score = 0.0
     if rev_stars == 5:
-        fundamental_score = 15.0  # 上方修正確率80%超（決算またぎ超本命）
+        fundamental_score = 15.0  # 業績成長最有力
     elif rev_stars == 4:
-        fundamental_score = 10.0  # 上方修正確率50-70%
+        fundamental_score = 10.0  # 好業績期待
     elif rev_stars == 3:
         fundamental_score = 4.0
     elif rev_stars == 2:
@@ -258,10 +303,12 @@ def evaluate_strategy_b(data: Dict[str, Any], days_until: int) -> Dict[str, Any]
     ]
     if current_price >= ma25 >= ma75:
         reasons.append("25MA・75MAパーフェクトオーダー（上値追いの順風）")
-    if 100 <= cap_billion <= 800:
-        reasons.append(f"時価総額 {int(cap_billion)}億円（S高が出やすい中小型急騰ゾーン）")
+    if 100 <= cap_oku <= 800:
+        reasons.append(f"時価総額 {int(cap_oku):,}億円（S高が出やすい中小型急騰ゾーン）")
+    elif cap_oku > 800:
+        reasons.append(f"時価総額 {int(cap_oku):,}億円（中大型安定ゾーン）")
     if rev_stars >= 4:
-        reasons.append(f"上方修正確率 {data.get('revision_probability', '')}")
+        reasons.append(f"業績成長判定 {data.get('revision_probability', '')}")
     if e_growth is not None:
         reasons.append(f"純利益成長率 {e_growth:+.1f}%")
 
@@ -289,7 +336,7 @@ def evaluate_strategy_c(data: Dict[str, Any], days_until: int) -> Dict[str, Any]
     bias25 = data["ma25_bias_pct"]
     volume_ratio = data.get("volume_ratio", 1.0)
     market_cap = data.get("market_cap", 0)
-    cap_billion = market_cap / 1_000_000_000
+    cap_oku = market_cap / 100_000_000
 
     score = 0.0
     breakdown = {}
@@ -387,12 +434,25 @@ def evaluate_stock_for_earnings_trade(ticker: str, days_until_earnings: int) -> 
     if not e_str:
         return None
 
-    # 基本足切り
-    if exp_return < 4.0 or rr_ratio < 0.9:
+    # 株価の妥当性チェック
+    if current_price is None or math.isnan(current_price) or current_price <= 0:
         return None
 
+    # 基本足切り: 想定リターン4.0%以上、リスクリワード比1.2以上 (プロ基準)
+    if exp_return < 4.0 or rr_ratio < 1.2:
+        return None
+
+    # 東証営業日数の計算（決算発表日までの実営業日数）
+    business_days = None
+    try:
+        e_date = datetime.strptime(e_str[:10], "%Y-%m-%d").date()
+        today = date.today()
+        business_days = get_tse_business_days_between(today, e_date)
+    except Exception:
+        business_days = max(0, int(round(days_until_earnings * 5 / 7)))
+
     # 3大戦略それぞれのスコアを算出
-    eval_a = evaluate_strategy_a(data, days_until_earnings)
+    eval_a = evaluate_strategy_a(data, days_until_earnings, business_days_until=business_days)
     eval_b = evaluate_strategy_b(data, days_until_earnings)
     eval_c = evaluate_strategy_c(data, days_until_earnings)
 
@@ -437,8 +497,10 @@ def evaluate_stock_for_earnings_trade(ticker: str, days_until_earnings: int) -> 
         "name": data["name"],
         "sector": data["sector"],
         "current_price": current_price,
+        "price_date": data.get("price_date", ""),
         "earnings_date": e_str,
         "days_until_earnings": days_until_earnings,
+        "business_days_until": business_days,
         "technical_pattern": pattern,
         "target_price": target_price,
         "stop_loss": stop_loss,
@@ -465,6 +527,7 @@ def evaluate_stock_for_earnings_trade(ticker: str, days_until_earnings: int) -> 
         "market_cap": market_cap,
         "volume_ratio": volume_ratio,
         "revision_probability": data.get("revision_probability", "★★★ 標準"),
+        "revision_stars": data.get("revision_stars", 3),
         "earnings_growth": data.get("earnings_growth"),
         "revenue_growth": data.get("revenue_growth"),
         "operating_margins": data.get("operating_margins")
@@ -504,7 +567,7 @@ def auto_screen_upcoming_opportunities(
     opportunities = []
     all_evaluated = []
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         future_to_hit = {
             executor.submit(
                 evaluate_stock_for_earnings_trade,
@@ -537,6 +600,20 @@ def auto_screen_upcoming_opportunities(
             x for x in all_evaluated
             if not strategy_filter or x["strategy"] == strategy_filter.upper()
         ]
+
+    # APIレート制限等で0件の場合は、市場データキャッシュからフォールバック
+    if not opportunities:
+        from tools.market_data import _load_market_cache
+        c_data = _load_market_cache()
+        if c_data:
+            print(f"[screener] 外部API制限検知: キャッシュデータ({len(c_data)}銘柄)からフォールバック抽出します。")
+            hit_map = {h["code"]: h["days_until"] for h in earnings_hits}
+            for code, meta in c_data.items():
+                d_until = hit_map.get(code, 7)
+                res = evaluate_stock_for_earnings_trade(code, d_until)
+                if res and res["score"] >= 50.0:
+                    if not strategy_filter or res["strategy"] == strategy_filter.upper():
+                        opportunities.append(res)
 
     # スコア順にソート
     opportunities.sort(key=lambda x: (-x["score"], x["days_until_earnings"], -x["expected_return_pct"]))

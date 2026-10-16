@@ -141,7 +141,7 @@ function initMarketDataHandlers() {
 
         document.getElementById('p-notes').value = 
           `【自動テクニカル判定】パターン: ${d.technical_pattern}\n` +
-          `25日線: ${d.ma25}円 (乖離: ${d.ma25_bias_pct}%), 上方修正確度: ${d.revision_probability || '★★★'}\n` +
+          `25日線: ${d.ma25}円 (乖離: ${d.ma25_bias_pct}%), 業績判定: ${d.revision_probability || '★★★'}\n` +
           (d.earnings_growth ? `純利益成長: ${d.earnings_growth >= 0 ? '+' : ''}${d.earnings_growth}%\n` : '') +
           `波動目標: N=${d.wave_targets.N_target}円 / V=${d.wave_targets.V_target}円 / E=${d.wave_targets.E_target}円`;
 
@@ -435,9 +435,9 @@ function renderFilteredOpportunities() {
           <span>決算予定: <strong>${opp.earnings_date}</strong> <span style="color:var(--accent-orange); font-weight:700;">(${opp.days_until_earnings === 0 ? '本日発表予定！' : opp.days_until_earnings === 1 ? '明日発表！' : `あと約${opp.days_until_earnings}日`})</span></span>
           <span>テクニカル: <strong>${opp.technical_pattern}</strong></span>
           <span>25日線乖離: ${opp.ma25_bias_pct >= 0 ? '+' : ''}${opp.ma25_bias_pct}%</span>
-          <span>上方修正確度: <strong style="color:var(--accent-amber);">${opp.revision_probability || '★★★ 標準'}</strong></span>
+          <span>業績判定: <strong style="color:var(--accent-amber);">${opp.revision_probability || '★★★ 標準'}</strong></span>
           ${opp.earnings_growth !== null && opp.earnings_growth !== undefined ? `<span>純利益成長: <strong style="color:var(--accent-emerald);">${opp.earnings_growth >= 0 ? '+' : ''}${opp.earnings_growth}%</strong></span>` : ''}
-          ${opp.market_cap ? `<span>時価総額: ${Math.round(opp.market_cap / 1000000000)}億円</span>` : ''}
+          ${opp.market_cap ? `<span>時価総額: ${Math.round(opp.market_cap / 100000000).toLocaleString()}億円</span>` : ''}
           ${opp.volume_ratio ? `<span>出来高比: ${opp.volume_ratio}倍</span>` : ''}
         </div>
         <div class="opp-price-box">

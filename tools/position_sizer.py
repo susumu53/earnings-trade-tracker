@@ -40,6 +40,9 @@ class PositionResult:
     actual_risk: float
     risk_reward_ratio: float
     leverage_position: float
+    risk_exceeded: bool = False
+    odd_lot_shares: int = 0
+    odd_lot_risk: float = 0.0
 
 
 def calculate_position(
@@ -61,7 +64,7 @@ def calculate_position(
         stop_loss_price: 損切り価格
         target_price: 利確目標価格
         leverage: レバレッジ倍率
-        unit_shares: 単元株数（通常100株）
+        unit_shares: 単元株数（通常100株、ミニ株なら1株）
 
     Returns:
         PositionResult: 計算結果
@@ -74,25 +77,32 @@ def calculate_position(
     if stop_loss_width == 0:
         stop_loss_width = entry_price * 0.05  # デフォルト5%
 
-    # 3. 最大株数
-    max_shares = max_loss / stop_loss_width
+    # 3. 最大株数（1株単位の厳密解）
+    exact_shares = max_loss / stop_loss_width
+    odd_lot_shares = max(1, int(exact_shares))
+    odd_lot_risk = round(odd_lot_shares * stop_loss_width, 1)
+
     # 単元株に丸める
-    max_shares_rounded = int(max_shares // unit_shares) * unit_shares
+    max_shares_rounded = int(exact_shares // unit_shares) * unit_shares
+    risk_exceeded = False
     if max_shares_rounded == 0:
+        # 最低単元株を採用するが、リスクが上限を超えるフラグを立てる
         max_shares_rounded = unit_shares
+        if (max_shares_rounded * stop_loss_width) > max_loss:
+            risk_exceeded = True
 
     # 4. ポジションサイズ
     position_size = max_shares_rounded * entry_price
 
     # 5. レバレッジ適用時の実質ポジション
-    leverage_position = position_size  # レバレッジは必要証拠金を下げるが、リスクは同じ
+    leverage_position = position_size
 
     # 6. 実際のリスク
-    actual_risk = max_shares_rounded * stop_loss_width
+    actual_risk = round(max_shares_rounded * stop_loss_width, 1)
 
     # 7. リスクリワード比
     target_width = abs(target_price - entry_price)
-    risk_reward = target_width / stop_loss_width if stop_loss_width > 0 else 0
+    risk_reward = round(target_width / stop_loss_width, 2) if stop_loss_width > 0 else 0.0
 
     return PositionResult(
         max_loss_amount=max_loss,
@@ -100,7 +110,10 @@ def calculate_position(
         shares=max_shares_rounded,
         actual_risk=actual_risk,
         risk_reward_ratio=risk_reward,
-        leverage_position=leverage_position
+        leverage_position=leverage_position,
+        risk_exceeded=risk_exceeded,
+        odd_lot_shares=odd_lot_shares,
+        odd_lot_risk=odd_lot_risk
     )
 
 

@@ -8,11 +8,40 @@ yfinanceおよび公開市場データソースから日本株（TSE）の
 リアルタイム株価、決算予定日、テクニカル指標、波動計算、決算後1週間値動きを自動取得
 """
 
+import os
+import json
 import math
 from datetime import datetime, timedelta, date
 from typing import Dict, Any, Optional, List, Tuple
 import pandas as pd
 import yfinance as yf
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+CACHE_FILE = os.path.join(DATA_DIR, "market_data_cache.json")
+_MEM_CACHE: Dict[str, Dict[str, Any]] = {}
+
+def _load_market_cache() -> Dict[str, Dict[str, Any]]:
+    global _MEM_CACHE
+    if _MEM_CACHE:
+        return _MEM_CACHE
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                _MEM_CACHE = json.load(f)
+        except Exception:
+            _MEM_CACHE = {}
+    return _MEM_CACHE
+
+def _save_market_cache(ticker: str, data: Dict[str, Any]):
+    global _MEM_CACHE
+    _MEM_CACHE[ticker] = data
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(_MEM_CACHE, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 try:
     from tools.universe import get_stock_info
@@ -34,40 +63,99 @@ def normalize_ticker(ticker: str) -> str:
     return ticker_clean
 
 
-def fetch_stock_live_data(ticker_input: str) -> Dict[str, Any]:
+def classify_revision(
+    earnings_growth: Optional[float],
+    revenue_growth: Optional[float],
+    consensus_status: str = "中立",
+) -> Tuple[str, int]:
+    """
+    業績モメンタム・上方修正期待度を★1〜★5で判定する。
+
+    表示ラベルと判定根拠を一致させるため、★4以上は「純利益成長率」が
+    実際に基準を満たす場合のみ付与する。増収のみ（利益は伸び悩み）の場合は
+    ★3を上限とし、ラベルにその旨を明記する。
+
+    Returns:
+        (ラベル文字列, 星の数)
+    """
+    if earnings_growth is not None:
+        strong_revenue = revenue_growth is not None and revenue_growth >= 10.0
+        if earnings_growth >= 30.0:
+            return "★★★★★ 非常に有望 (利益成長+30%超)", 5
+        if earnings_growth >= 15.0:
+            return "★★★★ 有望 (利益成長+15%超)", 4
+        if earnings_growth >= 5.0:
+            return "★★★ 標準 (巡航増益ペース)", 3
+        if earnings_growth >= 0.0:
+            if strong_revenue:
+                return "★★★ 標準 (増収だが利益は伸び悩み)", 3
+            return "★★ 注意 (増益モメンタム鈍化)", 2
+        return "★ 警戒 (減益・下方修正リスク)", 1
+
+    # 業績データなしの場合はアナリスト目標株価コンセンサスから推計
+    if consensus_status == "上振れ期待":
+        return "★★★★ 有望 (目標株価上振れ期待)", 4
+    if consensus_status == "下振れ懸念":
+        return "★ 警戒 (目標株価下振れ懸念)", 1
+    return "★★★ 標準 (データ巡航)", 3
+
+
+def fetch_stock_live_data(ticker_input: str, force_refresh: bool = False) -> Dict[str, Any]:
     """
     銘柄コードから市場の実データを自動取得し、テクニカル分析・波動計算・目標値を自動生成
+    （レートリミット時やエラー時はキャッシュからフォールバック）
     """
     symbol = normalize_ticker(ticker_input)
     ticker_code = ticker_input.strip().upper().replace(".T", "")
-    t = yf.Ticker(symbol)
+    cache = _load_market_cache()
 
-    # 1. 銘柄基本情報
-    info = {}
+    if not force_refresh and ticker_code in cache:
+        # キャッシュが有効な場合はそのまま使用
+        cached_entry = cache[ticker_code]
+        if cached_entry.get("current_price") and cached_entry.get("target_price"):
+            return cached_entry
+
     try:
-        info = t.info or {}
-    except Exception:
-        pass
+        t = yf.Ticker(symbol)
 
-    # 日本語会社名・業種名を優先取得
-    stock_meta = get_stock_info(ticker_code) if get_stock_info else None
-    if stock_meta and stock_meta.get("name"):
-        name = stock_meta["name"]
-    else:
-        name = info.get("longName") or info.get("shortName") or ticker_input
+        # 1. 銘柄基本情報
+        info = {}
+        try:
+            info = t.info or {}
+        except Exception:
+            pass
 
-    if stock_meta and stock_meta.get("sector"):
-        sector = stock_meta["sector"]
-    else:
-        sector = info.get("sector") or info.get("industry") or "一般"
+        # 日本語会社名・業種名を優先取得
+        stock_meta = get_stock_info(ticker_code) if get_stock_info else None
+        if stock_meta and stock_meta.get("name"):
+            name = stock_meta["name"]
+        else:
+            name = info.get("longName") or info.get("shortName") or ticker_input
 
-    # 2. 直近株価と日足データ (過去6ヶ月)
-    hist = t.history(period="6mo")
-    if hist.empty:
-        raise ValueError(f"銘柄コード {symbol} の株価データを取得できませんでした。コードを確認してください。")
+        if stock_meta and stock_meta.get("sector"):
+            sector = stock_meta["sector"]
+        else:
+            sector = info.get("sector") or info.get("industry") or "一般"
 
-    # 現在株価
-    current_price = round(float(hist["Close"].iloc[-1]), 1)
+        # 2. 直近株価と日足データ (過去6ヶ月)
+        hist = t.history(period="6mo")
+        if hist.empty:
+            if ticker_code in cache:
+                return cache[ticker_code]
+            raise ValueError(f"銘柄コード {symbol} の株価データを取得できませんでした。コードを確認してください。")
+        hist = hist.dropna(subset=["Close"])
+        if hist.empty:
+            if ticker_code in cache:
+                return cache[ticker_code]
+            raise ValueError(f"銘柄コード {symbol} の有効な株価データが取得できませんでした。")
+
+        # 現在株価とデータ基準日
+        current_price = round(float(hist["Close"].iloc[-1]), 1)
+        price_date = hist.index[-1].strftime("%Y-%m-%d")
+    except Exception as e:
+        if ticker_code in cache:
+            return cache[ticker_code]
+        raise e
 
     # 3. テクニカル指標計算 (25MA, 75MA, ボリンジャーバンド, 直近高値・安値)
     close_series = hist["Close"]
@@ -183,34 +271,8 @@ def fetch_stock_live_data(ticker_input: str) -> Dict[str, Any]:
     revenue_growth = round(float(info.get("revenueGrowth", 0.0)) * 100, 1) if info.get("revenueGrowth") is not None else None
     operating_margins = round(float(info.get("operatingMargins", 0.0)) * 100, 1) if info.get("operatingMargins") is not None else None
 
-    # 上方修正確率の推計判定（★〜★★★★★）
-    if earnings_growth is not None:
-        if earnings_growth >= 30.0 or (revenue_growth and revenue_growth >= 20.0):
-            revision_prob = "★★★★★ 非常に高い (80%超)"
-            revision_stars = 5
-        elif earnings_growth >= 15.0 or (revenue_growth and revenue_growth >= 10.0):
-            revision_prob = "★★★★ 高い (50-70%)"
-            revision_stars = 4
-        elif earnings_growth >= 5.0:
-            revision_prob = "★★★ やや高い (30-50%)"
-            revision_stars = 3
-        elif earnings_growth >= 0.0:
-            revision_prob = "★★ 普通 (10-30%)"
-            revision_stars = 2
-        else:
-            revision_prob = "★ 低い (下方リスク注意)"
-            revision_stars = 1
-    else:
-        # データなしの場合はコンセンサスから推計
-        if consensus_status == "上振れ期待":
-            revision_prob = "★★★★ 高い (目標株価上振れ)"
-            revision_stars = 4
-        elif consensus_status == "下振れ懸念":
-            revision_prob = "★ 低い (目標株価下振れ)"
-            revision_stars = 1
-        else:
-            revision_prob = "★★★ 標準 (データ巡航)"
-            revision_stars = 3
+    # 業績モメンタム・上方修正期待度の推計判定（★〜★★★★★）
+    revision_prob, revision_stars = classify_revision(earnings_growth, revenue_growth, consensus_status)
 
     # 想定リターン & リスクリワード
     reward = recommended_target - current_price
@@ -218,12 +280,13 @@ def fetch_stock_live_data(ticker_input: str) -> Dict[str, Any]:
     exp_return_pct = round((reward / current_price) * 100, 2)
     rr_ratio = round(reward / risk, 2) if risk > 0 else 99.9
 
-    return {
+    result = {
         "ticker": ticker_input.strip().upper().replace(".T", ""),
         "symbol": symbol,
         "name": name,
         "sector": sector,
         "current_price": current_price,
+        "price_date": price_date,
         "earnings_date": earnings_date_str,
         "technical_pattern": technical_pattern,
         "ma25": ma25,
@@ -254,6 +317,8 @@ def fetch_stock_live_data(ticker_input: str) -> Dict[str, Any]:
         "revision_probability": revision_prob,
         "revision_stars": revision_stars
     }
+    _save_market_cache(ticker_code, result)
+    return result
 
 
 def fetch_stock_chart_data(ticker_input: str, period: str = "6mo") -> Dict[str, Any]:
